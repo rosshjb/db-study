@@ -1,0 +1,134 @@
+
+TKPROF: Release 19.0.0.0.0 - Development on ¿ù 6¿ù 12 19:12:34 2023
+
+Copyright (c) 1982, 2019, Oracle and/or its affiliates.  All rights reserved.
+
+Trace file: C:\APP\ORA19C\diag\rdbms\ora19c\ora19c\trace\ora19c_ora_1800.trc
+Sort options: default
+
+********************************************************************************
+count    = number of times OCI procedure was executed
+cpu      = cpu time in seconds executing 
+elapsed  = elapsed time in seconds executing
+disk     = number of physical reads of buffers from disk
+query    = number of buffers gotten for consistent read
+current  = number of buffers gotten in current mode (usually for update)
+rows     = number of rows processed by the fetch or execute call
+********************************************************************************
+
+SQL ID: 8am3c6wqp3upw Plan Hash: 2949544139
+
+select * 
+from
+ emp where empno = 7900
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0          2          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          2          0           1
+
+Misses in library cache during parse: 1
+Optimizer mode: ALL_ROWS
+Parsing user id: 107  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  TABLE ACCESS BY INDEX ROWID EMP (cr=2 pr=0 pw=0 time=8 us starts=1 cost=1 size=38 card=1)
+         1          1          1   INDEX UNIQUE SCAN PK_EMP (cr=1 pr=0 pw=0 time=3 us starts=1 cost=0 size=0 card=1)(object id 80527)
+
+********************************************************************************
+
+SQL ID: a5ks9fhw2v9s1 Plan Hash: 272002086
+
+select * 
+from
+ dual
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        1      0.00       0.00          0          2          0           1
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        3      0.00       0.00          0          2          0           1
+
+Misses in library cache during parse: 1
+Optimizer mode: ALL_ROWS
+Parsing user id: 107  
+Number of plan statistics captured: 1
+
+Rows (1st) Rows (avg) Rows (max)  Row Source Operation
+---------- ---------- ----------  ---------------------------------------------------
+         1          1          1  TABLE ACCESS FULL DUAL (cr=2 pr=0 pw=0 time=30 us starts=1 cost=2 size=2 card=1)
+
+********************************************************************************
+
+SQL ID: 988n7wn97ptgf Plan Hash: 0
+
+alter session set sql_trace = false
+
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute      1      0.00       0.00          0          0          0           0
+Fetch        0      0.00       0.00          0          0          0           0
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        2      0.00       0.00          0          0          0           0
+
+Misses in library cache during parse: 0
+Parsing user id: 107  
+
+
+
+********************************************************************************
+
+OVERALL TOTALS FOR ALL NON-RECURSIVE STATEMENTS
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        3      0.00       0.00          0          0          0           0
+Execute      3      0.00       0.00          0          0          0           0
+Fetch        2      0.00       0.00          0          4          0           2
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total        8      0.00       0.00          0          4          0           2
+
+Misses in library cache during parse: 2
+
+
+OVERALL TOTALS FOR ALL RECURSIVE STATEMENTS
+
+call     count       cpu    elapsed       disk      query    current        rows
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+Parse        1      0.00       0.00          0          0          0           0
+Execute     26      0.00       0.00          0          0          0           0
+Fetch       43      0.00       0.00          0         90          0          35
+------- ------  -------- ---------- ---------- ---------- ----------  ----------
+total       70      0.00       0.00          0         90          0          35
+
+Misses in library cache during parse: 1
+Misses in library cache during execute: 1
+
+    3  user  SQL statements in session.
+   11  internal SQL statements in session.
+   14  SQL statements in session.
+********************************************************************************
+Trace file: C:\APP\ORA19C\diag\rdbms\ora19c\ora19c\trace\ora19c_ora_1800.trc
+Trace file compatibility: 12.2.0.0
+Sort options: default
+
+       1  session in tracefile.
+       3  user  SQL statements in trace file.
+      11  internal SQL statements in trace file.
+      14  SQL statements in trace file.
+      14  unique SQL statements in trace file.
+     200  lines in trace file.
+       1  elapsed seconds in trace file.
+
+
