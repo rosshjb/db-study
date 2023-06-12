@@ -489,3 +489,135 @@ select round(avg(sal)) avg_sal,
        max(sal) max_sal,
        max(decode(job, 'PRESIDENT', 0, sal)) max_sal2
 from emp;
+--------------------------------------------------------------------------------
+-- 2.3 인덱스 확장기능 사용법
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 2.3.1 index range scan
+--------------------------------------------------------------------------------
+set autotrace traceonly explain;
+
+select * from emp where deptno = 20;
+--------------------------------------------------------------------------------
+-- 2.3.2 index full scan
+--------------------------------------------------------------------------------
+create index emp_ename_sal_idx on emp(ename, sal);
+
+set autotrace traceonly explain;
+
+select * from emp
+where sal > 2000
+order by ename;
+
+--------------------------------------------------------------------------------
+-- index full scan의 효용성
+--------------------------------------------------------------------------------
+select * from emp
+where sal > 9000
+order by ename;
+--------------------------------------------------------------------------------
+-- 인덱스를 이용한 소트 연산 생략
+--------------------------------------------------------------------------------
+select /*+ first_rows */ * from emp
+where sal > 1000
+order by ename;
+--------------------------------------------------------------------------------
+-- 2.3.3 index unique scan
+--------------------------------------------------------------------------------
+alter table emp drop constraint pk_emp;
+
+create unique index pk_emp on emp(empno);
+
+alter table emp add constraint pk_emp primary key (empno) using index pk_emp;
+
+set autotrace traceonly explain;
+
+select empno, ename from emp where empno = 7788;
+--------------------------------------------------------------------------------
+-- 2.3.4 index skip scan
+--------------------------------------------------------------------------------
+set autotrace off;
+
+create table 사원(
+    이름 varchar2(10) constraint 사원_pk primary key,
+    성별 varchar2(1),
+    연봉 number(10)
+);
+
+create index 사원_idx on 사원(성별, 연봉);
+
+explain plan for
+select * from 사원
+where 성별 = '남' and 연봉 between 2000 and 4000;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ index_ss(사원 사원_idx) */ * from 사원
+where 연봉 between 2000 and 4000;
+
+select * from table(dbms_xplan.display());
+
+drop table 사원;
+--------------------------------------------------------------------------------
+-- index skip scan이 작동하기 위한 조건
+--------------------------------------------------------------------------------
+create table 일별업종별거래(
+    업종유형코드 varchar2(2),
+    업종코드 varchar2(1),
+    기준일자 varchar2(8),
+    체결건수 number(10),
+    체결수량 number(10),
+    거래대금 number(10),
+    constraint 일별업종별거래_pk primary key (업종유형코드, 업종코드, 기준일자)
+);
+
+explain plan for
+select /*+ index_ss(a 일별업종별거래_pk) no_batch_table_access_by_rowid(a) */
+    기준일자, 업종코드, 체결건수, 체결수량, 거래대금
+from 일별업종별거래 a
+where 업종유형코드 = '01'
+and 기준일자 between '20080501' and '20080531';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ index_ss(a 일별업종별거래_pk) no_batch_table_access_by_rowid(a) */
+    기준일자, 업종코드, 체결건수, 체결수량, 거래대금
+from 일별업종별거래 a
+where 기준일자 between '20080501' and '20080531';
+
+select * from table(dbms_xplan.display());
+
+create index 일별업종별거래_x01 on 일별업종별거래(기준일자, 업종유형코드);
+
+explain plan for
+select /*+ index_ss(a 일별업종별거래_x01) no_batch_table_access_by_rowid(a) */
+    기준일자, 업종코드, 체결건수, 체결수량, 거래대금
+from 일별업종별거래 a
+where 기준일자 between '20080501' and '20080531'
+and 업종유형코드 = '01';
+
+select * from table(dbms_xplan.display());
+
+drop table 일별업종별거래;
+--------------------------------------------------------------------------------
+-- 2.3.6 index range scan descending
+--------------------------------------------------------------------------------
+explain plan for
+select * from emp
+where empno > 0
+order by empno desc;
+
+select * from table(dbms_xplan.display());
+
+create index emp_x02 on emp(deptno, sal);
+
+explain plan for
+select deptno, dname, loc,
+    (select /*+ no_unnest */ max(sal) from emp where deptno = d.deptno)
+from dept d;
+
+select * from table(dbms_xplan.display());
+
+drop index emp_x02;
