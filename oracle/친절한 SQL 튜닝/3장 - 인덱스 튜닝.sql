@@ -67,7 +67,7 @@ from 고객 c, 고객변경이력 h
 where c.실명확인번호 = :rmnno
 and h.고객번호 = c.고객번호
 and h.변경일시 = (
-    select /*+ index(m 고객변경이력_pk) */ max(변경일시)
+    select /*+ index(m 고객변경이력_pk) no_unnest push_subq */ max(변경일시)
     from 고객변경이력 m
     where 고객번호 = c.고객번호
     and 변경일시 >= trunc(add_months(sysdate, -12), 'mm')
@@ -95,7 +95,7 @@ from 고객 c, 고객변경이력 h
 where c.고객구분코드 = 'A001'
 and h.고객번호 = c.고객번호
 and h.변경일시 = (
-    select /*+ index(m 고객변경이력_pk) unnest */ max(변경일시)
+    select /*+ index(m 고객변경이력_pk) no_unnest push_subq */ max(변경일시)
     from 고객변경이력 m
     where 고객번호 = c.고객번호
     and 변경일시 >= trunc(add_months(sysdate, -12), 'mm')
@@ -147,4 +147,306 @@ drop table 고객;
 --------------------------------------------------------------------------------
 -- 3.1.4 인덱스 컬럼 추가
 --------------------------------------------------------------------------------
--- ...
+create index emp_x01 on emp(deptno, job);
+
+select /*+ gather_plan_statistics no_batch_table_access_by_rowid(emp)
+           index(emp emp_x01) */ *
+from emp
+where deptno = 30
+and sal >= 2000;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ gather_plan_statistics index(emp emp_x01) */ *
+from emp where deptno = 30 and job = 'CLERK';
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop index emp_x01;
+create index emp_x01 on emp(deptno, job, sal);
+
+select /*+ gather_plan_statistics no_batch_table_access_by_rowid(emp)
+           index(emp emp_x01) */ *
+from emp
+where deptno = 30
+and sal >= 2000;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop index emp_x01;
+
+create table 로밍렌탈(
+    렌탈관리번호 number(10) primary key,
+    고객명 varchar2(10),
+    서비스관리번호 number(10),
+    서비스번호 varchar2(12) not null,
+    예약접수일시 date,
+    방문국가코드1 varchar2(10), 방문국가코드2 varchar2(10), 방문국가코드3 varchar2(10),
+    로밍승인번호 number(10),
+    자동로밍여부 varchar2(1),
+    사용여부 varchar2(1)
+);
+
+create index 로밍렌탈_n2 on 로밍렌탈(서비스번호);
+
+explain plan for
+select 렌탈관리번호, 고객명, 서비스관리번호, 서비스번호, 예약접수일시,
+       방문국가코드1, 방문국가코드2, 방문국가코드3, 로밍승인번호, 자동로밍여부
+from 로밍렌탈
+where 서비스번호 like '010%' and 사용여부 = 'Y';
+
+select * from table(dbms_xplan.display());
+
+drop index 로밍렌탈_n2;
+create index 로밍렌탈_n2 on 로밍렌탈(서비스번호, 사용여부);
+
+explain plan for
+select 렌탈관리번호, 고객명, 서비스관리번호, 서비스번호, 예약접수일시,
+       방문국가코드1, 방문국가코드2, 방문국가코드3, 로밍승인번호, 자동로밍여부
+from 로밍렌탈
+where 서비스번호 like '010%' and 사용여부 = 'Y';
+
+select * from table(dbms_xplan.display());
+
+drop table 로밍렌탈;
+--------------------------------------------------------------------------------
+-- 3.1.5 인덱스만 읽고 처리
+--------------------------------------------------------------------------------
+create table 판매집계(
+    부서번호 varchar2(10) constraint 판매집계_pk primary key,
+    수량 number(10) not null
+);
+
+explain plan for
+select /*+ index(판매집계 판매집계_pk) */ 부서번호, sum(수량)
+from 판매집계 where 부서번호 like '12%'
+group by 부서번호;
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+alter table 판매집계 drop constraint 판매집계_pk;
+alter table 판매집계 add constraint 판매집계_pk primary key (부서번호, 수량);
+
+explain plan for
+select /*+ index(판매집계 판매집계_pk) */ 부서번호, sum(수량)
+from 판매집계 where 부서번호 like '12%'
+group by 부서번호;
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+drop table 판매집계;
+--------------------------------------------------------------------------------
+-- 3.1.6 인덱스 구조 테이블
+--------------------------------------------------------------------------------
+create table index_org_t(
+    a number,
+    b varchar(10),
+    constraint index_org_t_pk primary key (a)
+) organization index;
+
+create table heap_org_t(
+    a number,
+    b varchar(10),
+    constraint heap_org_t_pk primary key (a)
+) organization heap;
+
+drop table heap_org_t;
+drop table index_org_t;
+
+create table 영업실적_heap(
+    사번 varchar2(5),
+    일자 varchar2(8),
+    판매금액 number(10) default 0 not null,
+    constraint 영업실적_heap_pk primary key (사번, 일자)
+) organization heap;
+
+explain plan for
+select substr(일자, 1, 6) 월도, sum(판매금액) 총판매금액, avg(판매금액) 평균판매금액
+from 영업실적_heap where 사번 = 'S1234' and 일자 between '20180101' and '20181231'
+group by substr(일자, 1, 6);
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+create table 영업실적_index(
+    사번 varchar2(5),
+    일자 varchar2(8),
+    판매금액 number(10) default 0 not null,
+    constraint 영업실적_index_pk primary key (사번, 일자)
+) organization index;
+
+explain plan for
+select substr(일자, 1, 6) 월도, sum(판매금액) 총판매금액, avg(판매금액) 평균판매금액
+from 영업실적_index where 사번 = 'S1234' and 일자 between '20180101' and '20181231'
+group by substr(일자, 1, 6);
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+drop table 영업실적_heap;
+drop table 영업실적_index;
+--------------------------------------------------------------------------------
+-- 3.1.7 클러스터 테이블
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 인덱스 클러스터 테이블
+--------------------------------------------------------------------------------
+create cluster c_dept#(
+    deptno number(2)
+) index;
+
+create index c_dept#_idx on cluster c_dept#;
+
+create table c_dept(
+    deptno number(2) not null,
+    dname varchar2(14) not null,
+    loc varchar2(13)
+) cluster c_dept#(deptno);
+
+explain plan for
+select * from c_dept where deptno = :deptno;
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+drop table c_dept;
+drop index c_dept#_idx;
+drop cluster c_dept#;
+--------------------------------------------------------------------------------
+-- 해시 클러스터 테이블
+--------------------------------------------------------------------------------
+create cluster c_dept#(
+    deptno number(2)
+) hashkeys 4;
+
+create table c_dept(
+    deptno number(2) not null,
+    dname varchar2(14) not null,
+    loc varchar2(13)
+) cluster c_dept#(deptno);
+
+explain plan for
+select * from c_dept where deptno = :deptno;
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+drop table c_dept;
+drop cluster c_dept#;
+--------------------------------------------------------------------------------
+-- 3.2 부분범위 처리 활용
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 3.2.1 부분범위 처리
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 쿼리 툴에서 부분범위 처리
+--------------------------------------------------------------------------------
+create table big_table as
+select * from dba_objects, (select level no from dual connect by level <= 100);
+
+select * from big_table;
+
+show arraysize;
+
+select object_id, object_name from big_table;
+
+drop table big_table;
+--------------------------------------------------------------------------------
+-- 3.2.3 OLTP 환경에서 부분범위 처리에 의한 성능개선 원리
+--------------------------------------------------------------------------------
+create table 게시판(
+    게시글id varchar2(10) constraint 게시판_pk primary key,
+    제목 varchar2(10) not null,
+    작성자 varchar2(10) not null,
+    등록일시 timestamp not null,
+    게시판구분코드 varchar2(1) not null
+);
+
+create index 게시판_x01 on 게시판(게시판구분코드);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(게시판) index(게시판 게시판_x01) */
+    게시글id, 제목, 작성자, 등록일시
+from 게시판
+where 게시판구분코드 = 'A'
+order by 등록일시 desc;
+
+select * from table(dbms_xplan.display());
+
+create index 게시판_x02 on 게시판(게시판구분코드, 등록일시);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(게시판) index_rs_desc(게시판 게시판_x02) */
+    게시글id, 제목, 작성자, 등록일시
+from 게시판
+where 게시판구분코드 = 'A'
+order by 등록일시 desc;
+
+select * from table(dbms_xplan.display());
+
+drop table 게시판;
+--------------------------------------------------------------------------------
+-- 배치 I/O
+--------------------------------------------------------------------------------
+create index emp_x01 on emp(deptno, job, empno);
+
+set autotrace traceonly explain;
+
+select * from emp e where deptno = 20 order by job, empno;
+
+select /*+ batch_table_access_by_rowid(e) */ *
+from emp e where deptno = 20 order by job, empno;
+
+select /*+ index_rs_asc(e emp_x01) */ *
+from emp e where deptno = 20 order by empno;
+
+select /*+ index(e emp_x01) */ * from emp e where deptno = 20;
+
+drop index emp_x01;
+
+set autotrace off;
+
+create table 상태변경이력(
+    장비번호 number(10) not null,
+    장비명 varchar2(10) not null,
+    변경일시 date not null,
+    상태코드 varchar2(10) not null,
+    장비구분코드 varchar2(4) not null,
+    constraint 상태변경이력_pk primary key (장비번호, 변경일시)
+);
+
+explain plan for
+select /*+ index(h 상태변경이력_pk) */ 장비번호, 변경일시, 상태코드
+from 상태변경이력 h
+where 장비번호 = :eqp_no
+and rownum <= 10;
+
+select * from table(dbms_xplan.display());
+
+create table 장비(
+    장비번호 number(10) constraint 장비_pk primary key,
+    장비명 varchar2(10) not null,
+    상태코드 varchar2(10) not null,
+    장비구분코드 varchar2(4) not null
+);
+
+explain plan for
+select 장비번호, 장비명, 상태코드,
+       (select /*+ index_desc(h 상태변경이력_pk) merge */ 변경일시
+        from 상태변경이력 h
+        where 장비번호 = p.장비번호
+        and rownum <= 1) 최종변경일시
+from 장비 p
+where 장비구분코드 = 'A001';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ index(h 상태변경이력_pk) */ 장비번호, 변경일시, 상태코드
+from 상태변경이력 h
+where 장비번호 = :eqp_no;
+
+select * from table(dbms_xplan.display());
+
+drop table 장비;
+drop table 상태변경이력;
+--------------------------------------------------------------------------------
+-- 3.3 인덱스 스캔 효율화
+--------------------------------------------------------------------------------
