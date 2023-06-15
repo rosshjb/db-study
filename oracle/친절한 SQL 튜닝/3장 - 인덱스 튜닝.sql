@@ -450,3 +450,279 @@ drop table 상태변경이력;
 --------------------------------------------------------------------------------
 -- 3.3 인덱스 스캔 효율화
 --------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 3.3.1 인덱스 탐색
+--------------------------------------------------------------------------------
+create table tt(
+    c1 varchar2(1) not null,
+    c2 number(1) not null
+);
+
+create index tt_x01 on tt(c1, c2);
+
+explain plan for
+select * from tt where c1 = 'B';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt where c1 = 'B' and c2 = 3;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt where c1 = 'B' and c2 >= 3;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt where c1 = 'B' and c2 <= 3;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt where c1 = 'B' and c2 between 2 and 3;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt where c1 between 'A' and 'C' and c2 between 2 and 3;
+
+select * from table(dbms_xplan.display());
+
+drop table tt;
+--------------------------------------------------------------------------------
+-- 3.3.2 인덱스 스캔 효율성
+--------------------------------------------------------------------------------
+create table tt(
+    c1 varchar2(1 char) not null,
+    c2 varchar2(1 char) not null,
+    c3 varchar2(1 char) not null,
+    c4 varchar2(1 char) not null
+);
+
+create index tt_x01 on tt(c1, c2, c3, c4);
+
+explain plan for
+select * from tt
+where c1 = '성' and c2 = '능' and c3 = '검';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt
+where c1 = '성' and c2 = '능' and c4 = '선';
+
+select * from table(dbms_xplan.display());
+
+drop table tt;
+--------------------------------------------------------------------------------
+-- 3.3.4 비교 연산자 종류와 컬럼 순서에 따른 군집성
+--------------------------------------------------------------------------------
+create table tt(
+    c1 number(1) not null,
+    c2 varchar2(1 char) not null,
+    c3 varchar2(1 char) not null,
+    c4 varchar2(1 char) not null
+);
+
+create index tt_x01 on tt(c1, c2, c3, c4);
+
+explain plan for
+select * from tt
+where c1 = 1 and c2 = 'A' and c3 = '나' and c4 = 'a';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt
+where c1 = 1 and c2 = 'A' and c3 = '나' and c4 >= 'a';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt
+where c1 = 1 and c2 = 'A' and c3 between '가' and '다' and c4 = 'a';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt
+where c1 = 1 and c2 <= 'B' and c3 = '나' and c4 between 'a' and 'b';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from tt
+where c1 between 1 and 3 and c2 = 'A' and c3 = '나' and c4 = 'a';
+
+select * from table(dbms_xplan.display());
+
+drop table tt;
+--------------------------------------------------------------------------------
+-- 3.3.5 인덱스 선행 컬럼이 등치(=) 조건이 아닐 때 생기는 비효율
+--------------------------------------------------------------------------------
+create table 매물아파트매매(
+    해당층 number(10),
+    평당가 varchar2(10),
+    입력일 date,
+    해당동 varchar2(10),
+    매물구분 varchar2(1),
+    연사용일수 number(10),
+    중개업소코드 varchar2(10),
+    아파트시세코드 varchar2(20),
+    평형 varchar2(2),
+    평형타입 varchar2(1),
+    인터넷매물 varchar2(1),
+    constraint 매물아파트매매_pk primary key (아파트시세코드, 평형, 평형타입, 인터넷매물)
+);
+
+insert into 매물아파트매매(인터넷매물, 아파트시세코드, 평형, 평형타입) values ('1', 'A01011350900056', '59', 'A');
+insert into 매물아파트매매(인터넷매물, 아파트시세코드, 평형, 평형타입) values ('2', 'A01011350900056', '59', 'A');
+insert into 매물아파트매매(인터넷매물, 아파트시세코드, 평형, 평형타입) values ('3', 'A01011350900056', '59', 'A');
+commit;
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(매물아파트매매) index(매물아파트매매) */
+    해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A' and 인터넷매물 between '1' and '3'
+order by 입력일 desc;
+
+select * from table(dbms_xplan.display());
+
+alter table 매물아파트매매 drop constraint 매물아파트매매_pk;
+alter table 매물아파트매매 add constraint 매물아파트매매_pk primary key (인터넷매물, 아파트시세코드, 평형, 평형타입);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(매물아파트매매) index(매물아파트매매) */
+    해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 인터넷매물 between '1' and '3' and 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A'
+order by 입력일 desc;
+
+select * from table(dbms_xplan.display());
+--------------------------------------------------------------------------------
+-- 3.3.6 between을 in-list로 전환
+--------------------------------------------------------------------------------
+select /*+ no_batch_table_access_by_rowid(매물아파트매매) gather_plan_statistics index(매물아파트매매) */
+    해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 인터넷매물 in ('1', '2', '3')
+and 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A'
+order by 입력일 desc;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ no_batch_table_access_by_rowid(매물아파트매매) gather_plan_statistics index(매물아파트매매) */
+    해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 인터넷매물 = '1' and 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A'
+union all
+select 해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 인터넷매물 = '2' and 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A'
+union all
+select 해당층, 평당가, 입력일, 해당동, 매물구분, 연사용일수, 중개업소코드
+from 매물아파트매매
+where 인터넷매물 = '3' and 아파트시세코드 = 'A01011350900056' and 평형 = '59' and 평형타입 = 'A'
+order by 입력일 desc;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+create table 통합코드(
+    코드구분 varchar2(5),
+    코드 varchar2(10),
+    constraint 통합코드_pk primary key (코드구분, 코드)
+);
+
+insert into 통합코드(코드구분, 코드) values ('CD064', '1');
+insert into 통합코드(코드구분, 코드) values ('CD064', '2');
+insert into 통합코드(코드구분, 코드) values ('CD064', '3');
+commit;
+
+select /*+ ordered use_nl(b) gather_plan_statistics no_index_ffs(a) index(a) */
+    b.해당층, b.평당가, b.입력일, b.해당동, b.매물구분, b.연사용일수, b.중개업소코드
+from 통합코드 a, 매물아파트매매 b
+where a.코드구분 = 'CD064' -- 인터넷매물구분
+and a.코드 between '1' and '3'
+and b.인터넷매물 = a.코드
+and b.아파트시세코드 = 'A01011350900056' and b.평형 = '59' and b.평형타입 = 'A'
+order by b.입력일 desc;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop table 통합코드;
+
+drop table 매물아파트매매;
+--------------------------------------------------------------------------------
+-- between 조건을 in-list로 전환할 때 주의 사항
+--------------------------------------------------------------------------------
+create table 고객(
+    고객등급 varchar2(1),
+    고객번호 number(10),
+    constraint 고객_pk primary key (고객등급, 고객번호)
+);
+
+select /*+ gather_plan_statistics */ * from 고객
+where 고객등급 between 'C' and 'D'
+and 고객번호 = 123;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ gather_plan_statistics */ * from 고객
+where 고객등급 in ('C', 'D')
+and 고객번호 = 123;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- 3.3.7 index skip scan 활용
+--------------------------------------------------------------------------------
+create table 월별고객별판매집계
+as
+select rownum 고객번호,
+       '2018' || lpad(ceil(rownum/100000), 2, '0') 판매월,
+       decode(mod(rownum, 12), 1, 'A', 'B') 판매구분,
+       round(dbms_random.value(1000, 100000), -2) 판매금액
+from dual
+connect by level <= 1200000;
+
+create index 월별고객별판매집계_idx1 on 월별고객별판매집계(판매구분, 판매월);
+
+select /*+ gather_plan_statistics no_index_ffs(t) index(t 월별고객별판매집계_idx1) */ count(*)
+from 월별고객별판매집계 t
+where 판매구분 = 'A'
+and 판매월 between '201801' and '201812';
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+create index 월별고객별판매집계_idx2 on 월별고객별판매집계(판매월, 판매구분);
+
+select /*+ gather_plan_statistics no_index_ss(t) index(t 월별고객별판매집계_idx2) */ count(*)
+from 월별고객별판매집계 t
+where 판매월 between '201801' and '201812'
+and 판매구분 = 'A';
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ gather_plan_statistics index(t 월별고객별판매집계_idx2) */ count(*)
+from 월별고객별판매집계 t
+where 판매월 in ('201801', '201802', '201803', '201804', '201805', '201806',
+                '201807', '201808', '201809', '201810', '201811', '201812')
+and 판매구분 = 'A';
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ gather_plan_statistics index_ss(t 월별고객별판매집계_idx2) */ count(*)
+from 월별고객별판매집계 t
+where 판매월 between '201801' and '201812'
+and 판매구분 = 'A';
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop table 월별고객별판매집계;
+--------------------------------------------------------------------------------
+-- 3.3.8 in 조건은 '='인가
+--------------------------------------------------------------------------------
