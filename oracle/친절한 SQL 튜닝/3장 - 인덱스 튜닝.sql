@@ -790,4 +790,150 @@ drop table 상품;
 --------------------------------------------------------------------------------
 -- num_index_keys 힌트 활용
 --------------------------------------------------------------------------------
--- ...
+create table 고객별가입상품(
+    고객번호 number(10),
+    상품id varchar2(7),
+    가입일자 date
+);
+
+create index 고객별가입상품_x1 on 고객별가입상품(고객번호, 상품id);
+
+explain plan for
+select /*+ num_index_keys(a 고객별가입상품_x1 1) no_batch_table_access_by_rowid(a) */ *
+from 고객별가입상품 a
+where 고객번호 = :cust_no
+and 상품id in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ *
+from 고객별가입상품
+where 고객번호 = :cust_no
+and rtrim(상품id) in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ *
+from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id || '' in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ num_index_keys(a 고객별가입상품_x1 2) no_batch_table_access_by_rowid(a) */ *
+from 고객별가입상품 a
+where 고객번호 = :cust_no
+and 상품id in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+drop table 고객별가입상품;
+--------------------------------------------------------------------------------
+-- 3.3.9 between과 like 스캔 범위 비교
+--------------------------------------------------------------------------------
+create table 월별고객별판매집계(
+    판매월 varchar2(6),
+    판매구분 varchar2(1),
+    constraint 월별고객별판매집계_pk primary key (판매월, 판매구분)
+);
+
+explain plan for
+select * from 월별고객별판매집계
+where 판매월 between '201901' and '201912'
+and 판매구분 = 'B';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from 월별고객별판매집계
+where 판매월 like '2019%'
+and 판매구분 = 'B';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from 월별고객별판매집계
+where 판매월 between '201901' and '201912'
+and 판매구분 = 'A';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select * from 월별고객별판매집계
+where 판매월 like '2019%'
+and 판매구분 = 'A';
+
+select * from table(dbms_xplan.display());
+
+drop table 월별고객별판매집계;
+--------------------------------------------------------------------------------
+-- 3.3.10 범위검색 조건을 남용할 때 생기는 비효율
+--------------------------------------------------------------------------------
+create table 가입상품(
+    고객id varchar2(10) not null,
+    회사코드 varchar2(3) not null,
+    지역코드 varchar2(2) not null,
+    상품명 varchar2(10) not null
+);
+
+create index 가입상품_x01 on 가입상품(회사코드, 지역코드, 상품명);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(가입상품) */
+    고객id, 상품명, 지역코드
+from 가입상품
+where 회사코드 = :com
+and 지역코드 = :reg
+and 상품명 like :prod || '%';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(가입상품) */
+    고객id, 상품명, 지역코드
+from 가입상품
+where 회사코드 = :com
+and 상품명 like :prod || '%';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(가입상품) */
+    고객id, 상품명, 지역코드
+from 가입상품
+where 회사코드 = :com
+and 지역코드 like :reg || '%'
+and 상품명 like :prod || '%';
+
+select * from table(dbms_xplan.display());
+
+drop table 가입상품;
+
+create table 일별종목거래(
+    거래일자 date,
+    종목코드 varchar2(6),
+    투자자유형코드 varchar2(10),
+    주문매체구분코드 varchar2(10),
+    주문매체코드 varchar2(10),
+    체결건수 number(10),
+    체결수량 number(10),
+    거래대금 number(10),
+    constraint 일별종목거래_pk primary key (거래일자, 종목코드, 투자자유형코드, 주문매체구분코드)
+);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(일별종목거래) */
+       거래일자, 종목코드, 투자자유형코드,
+       주문매체코드, 체결건수, 체결수량, 거래대금
+from 일별종목거래
+where 거래일자 between :시작일자 and :종료일자
+and 종목코드 between :종목1 and :종목2
+and 투자자유형코드 between :투자자유형1 and :투자자유형2
+and 주문매체구분코드 between :주문매체구분1 and :주문매체구분2;
+
+select * from table(dbms_xplan.display());
+
+drop table 일별종목거래;
