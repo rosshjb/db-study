@@ -429,7 +429,7 @@ create table 장비(
 
 explain plan for
 select 장비번호, 장비명, 상태코드,
-       (select /*+ index_desc(h 상태변경이력_pk) merge */ 변경일시
+       (select /*+ index_desc(h 상태변경이력_pk) */ 변경일시
         from 상태변경이력 h
         where 장비번호 = p.장비번호
         and rownum <= 1) 최종변경일시
@@ -726,3 +726,68 @@ drop table 월별고객별판매집계;
 --------------------------------------------------------------------------------
 -- 3.3.8 in 조건은 '='인가
 --------------------------------------------------------------------------------
+create table 고객별가입상품(
+    고객번호 number(10),
+    상품id varchar2(7),
+    가입일자 date
+);
+
+create index 고객별가입상품_x1 on 고객별가입상품(상품id, 고객번호);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ * from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ * from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id = 'NH00037'
+union all
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ * from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id = 'NH00041'
+union all
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ * from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id = 'NH00050';
+
+select * from table(dbms_xplan.display());
+
+drop index 고객별가입상품_x1;
+
+create index 고객별가입상품_x1 on 고객별가입상품(고객번호, 상품id);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객별가입상품) */ * from 고객별가입상품
+where 고객번호 = :cust_no
+and 상품id in ('NH00037', 'NH00041', 'NH00050');
+
+select * from table(dbms_xplan.display());
+
+drop table 고객별가입상품;
+--------------------------------------------------------------------------------
+-- 더 쉬운 예
+--------------------------------------------------------------------------------
+create table 상품(
+    상품id varchar2(7) constraint 상품_pk primary key,
+    상품구분코드 varchar2(2),
+    상품명 varchar2(10)
+);
+
+create index 상품_x01 on 상품(상품id, 상품구분코드);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(상품) */ * from 상품
+where 상품id = :prod_id
+and 상품구분코드 in ('GX', 'KR');
+
+select * from table(dbms_xplan.display());
+
+drop table 상품;
+--------------------------------------------------------------------------------
+-- num_index_keys 힌트 활용
+--------------------------------------------------------------------------------
+-- ...
