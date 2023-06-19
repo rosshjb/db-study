@@ -937,3 +937,386 @@ and 주문매체구분코드 between :주문매체구분1 and :주문매체구�
 select * from table(dbms_xplan.display());
 
 drop table 일별종목거래;
+--------------------------------------------------------------------------------
+-- 3.3.11 다양한 옵션 조건 처리 방식의 장단점 비교
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- or 조건 활용
+--------------------------------------------------------------------------------
+create table 거래(
+    거래id number(10) primary key,
+    고객id number(10),
+    거래일자 date,
+    결제일자 date
+);
+
+create index 거래_idx3 on 거래(고객id, 거래일자);
+
+explain plan for
+select * from 거래
+where (:cust_id is null or 고객id = :cust_id)
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display());
+
+drop index 거래_idx3;
+
+create index 거래_idx3 on 거래(거래일자, 고객id);
+
+explain plan for
+select * from 거래
+where 거래일자 between :dt1 and :dt2
+and (:cust_id is null or 고객id = :cust_id);
+
+select * from table(dbms_xplan.display());
+
+drop index 거래_idx3;
+
+create index 거래_idx11 on 거래(고객id, 거래일자);
+create index 거래_idx22 on 거래(고객id, 결제일자);
+
+explain plan for
+select /*+ use_concat no_batch_table_access_by_rowid(거래)
+           index(거래@sel$1 거래_idx22) index(거래@sel$1_2 거래_idx11) */ * from 거래
+where 고객id = :cust_id
+and (
+    (:dt_type = 'A' and 거래일자 between :dt1 and :dt2)
+    or
+    (:dt_type = 'B' and 결제일자 between :dt1 and :dt2)
+);
+
+select * from table(dbms_xplan.display(format => 'advanced'));
+
+drop table 거래;
+--------------------------------------------------------------------------------
+-- like/between 조건 활용
+--------------------------------------------------------------------------------
+create table 상품(
+    상품명 varchar2(10),
+    상품대분류코드 varchar2(4),
+    상품분류코드 varchar2(4),
+    상품코드 varchar2(4),
+    등록일시 date
+);
+
+create index 상품_idx11 on 상품(등록일시, 상품분류코드);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(상품) */ * from 상품
+where 등록일시 >= trunc(sysdate)
+and 상품분류코드 like :prd_cls_cd || '%';
+
+select * from table(dbms_xplan.display());
+
+drop index 상품_idx11;
+
+create index 상품_idx11 on 상품(상품명, 상품분류코드);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(상품) */ * from 상품
+where 상품명 = :prd_nm
+and 상품분류코드 like :prd_cls_cd || '%';
+
+select * from table(dbms_xplan.display());
+
+drop index 상품_idx11;
+
+create index 상품_idx11 on 상품(상품대분류코드, 상품코드);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(상품) */ * from 상품
+where 상품대분류코드 = :prd_lcls_cd
+and 상품코드 like :prd_cd || '%';
+
+select * from table(dbms_xplan.display());
+
+drop table 상품;
+
+-- 인덱스 선두 컬럼
+create table 거래(
+    고객id varchar2(10),
+    거래일자 date
+);
+
+create index tr_idx on 거래(고객id, 거래일자);
+
+explain plan for
+select * from 거래
+where 고객id = :cust_id || '%'
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display());
+
+drop index tr_idx;
+
+create index tr_idx on 거래(거래일자, 고객id);
+
+explain plan for
+select * from 거래
+where 거래일자 between :dt1 and :dt2
+and 고객id = :cust_id || '%';
+
+select * from table(dbms_xplan.display());
+
+drop index tr_idx;
+-- null 허용 컬럼
+create index tr_idx on 거래(고객id, 거래일자);
+
+explain plan for
+select * from 거래
+--where 고객id like :cust_id || '%'
+where 고객id like '%'
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display());
+
+select * from dual where null like :var || '%';
+
+drop table 거래;
+-- 숫자형 컬럼
+create table 거래(
+    거래일자 date,
+    고객id number(10)
+);
+
+create index tr_idx on 거래(거래일자, 고객id);
+
+explain plan for
+select * from 거래
+where 거래일자 = :trd_dt
+and 고객id like :cust_id || '%';
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+-- 가변 길이 컬럼
+create table 고객
+as
+select '김훈' 고객명 from dual
+union all
+select '김훈남' 고객명 from dual;
+
+alter table 고객 add constraint 고객_pk primary key (고객명);
+
+select /*+ gather_plan_statistics */ * from 고객
+where 고객명 like :cust_nm || '%';
+
+select * from table(dbms_xplan.display_cursor());
+
+select /*+ gather_plan_statistics */ * from 고객
+where 고객명 like :cust_nm || '%'
+and length(고객명) = length(nvl(:cust_nm, 고객명));
+
+select * from table(dbms_xplan.display_cursor());
+
+select /*+ gather_plan_statistics */ * from 고객
+where 고객명 like :cust_nm;
+
+select * from table(dbms_xplan.display_cursor());
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- union all 활용
+--------------------------------------------------------------------------------
+create table 거래(
+    거래일자 date,
+    고객id number(10),
+    dummy varchar2(1)
+);
+
+create index 거래_idx11 on 거래(거래일자);
+create index 거래_idx22 on 거래(고객id, 거래일자);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(거래) index_rs(거래 거래_idx11) */ * from 거래
+where :cust_id is null
+and 거래일자 between :dt1 and :dt2
+union all
+select /*+ no_batch_table_access_by_rowid(거래) index_rs(거래 거래_idx22) */ * from 거래
+where :cust_id is not null
+and 고객id = :cust_id
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display());
+--------------------------------------------------------------------------------
+-- nvl/decode 함수 활용
+--------------------------------------------------------------------------------
+explain plan for
+select /*+ no_batch_table_access_by_rowid(거래)
+           index(@set$2a13af86_2 거래@set$2a13af86_2 거래_idx11)
+           index(@SET$2a13af86_1 거래@set$2a13af86_1 거래_idx22) */ * from 거래
+where 고객id = nvl(:cust_id, 고객id)
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display(format => '+alias'));
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(거래)
+           index(@set$2a13af86_1 거래 거래_idx22)
+           index(@set$2a13af86_2 거래 거래_idx11) */ * from 거래
+where 고객id = decode(:cust_id, null, 고객id, :cust_id)
+and 거래일자 between :dt1 and :dt2;
+
+select * from table(dbms_xplan.display(format => '+alias'));
+
+select * from dual where null = null;
+select * from dual where null is null;
+
+drop table 거래;
+--------------------------------------------------------------------------------
+-- 3.3.12 함수호출부하 해소를 위한 인덱스 구성
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- pl/sql 함수의 성능적 특성
+--------------------------------------------------------------------------------
+create table 회원(
+    회원번호 number(10) constraint 회원_pk primary key,
+    회원명 varchar2(10),
+    생년 varchar2(10),
+    생월일 varchar2(10),
+    전화번호 varchar2(10),
+    우편번호 varchar2(10)
+);
+
+create or replace function encryption(i_data in varchar2) return varchar2
+is
+    encrypted varchar2(100);
+begin
+    select standard_hash(i_data) into encrypted from dual;
+    return encrypted;
+end;
+/
+
+explain plan for
+select 회원번호, 회원명, 생년, 생월일, encryption(전화번호)
+from 회원
+where 회원번호 = :member_no;
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select 회원번호, 회원명, 생년, 생월일, encryption(전화번호)
+from 회원
+where 생월일 like '01%';
+
+select * from table(dbms_xplan.display());
+
+create table 기본주소(
+    우편번호 varchar2(10),
+    순번 number(10),
+    시도 varchar2(100),
+    구군 varchar2(100),
+    읍면동 varchar2(100),
+    constraint 기본주소_pk primary key (우편번호, 순번)
+);
+
+create or replace function get_addr(i_zip_code in varchar2) return varchar2
+is
+    addr varchar2(100);
+begin
+    select 시도 || ' ' || 구군 || ' ' || 읍면동
+    into addr
+    from 기본주소
+    where 우편번호 = i_zip_code
+    and 순번 = 1;
+
+    return addr;
+end;
+/
+
+explain plan for
+select 회원번호, 회원명, 생년, 생월일, get_addr(우편번호) as 기본주소
+from 회원
+where 생월일 like '01%';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select a.회원번호, a.회원명, a.생년, a.생월일,
+      (select b.시도 || ' ' || b.구군 || ' ' || b.읍면동
+       from 기본주소 b
+       where b.우편번호 = a.우편번호
+       and b.순번 = 1) 기본주소
+from 회원 a
+where 생월일 like '01%';
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select a.회원번호, a.회원명, a.생년, a.생월일,
+       b.시도 || ' ' || b.구군 || ' ' || b.읍면동 as 기본주소
+from 회원 a, 기본주소 b
+where a.생월일 like '01%'
+and b.우편번호(+) = a.우편번호
+and b.순번(+) = 1;
+
+select * from table(dbms_xplan.display());
+
+drop function get_addr;
+
+drop table 기본주소;
+drop table 회원;
+--------------------------------------------------------------------------------
+-- 효과적인 인덱스 구성을 통한 함수 호출 최소화
+--------------------------------------------------------------------------------
+create table 회원(
+    회원번호 number(10) constraint 회원_pk primary key,
+    회원명 varchar2(10),
+    생년 varchar2(4),
+    생월일 varchar2(10),
+    등록일자 date,
+    암호화된_전화번호 varchar2(100)
+);
+
+explain plan for
+select /*+ full(a) */ 회원번호, 회원명, 생년, 생월일, 등록일자
+from 회원 a
+where 암호화된_전화번호 = encryption(:phone_no);
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ full(a) */ 회원번호, 회원명, 생년, 생월일, 등록일자
+from 회원 a
+where 생년 = '1987'
+and 암호화된_전화번호 = encryption(:phone_no);
+
+select * from table(dbms_xplan.display());
+
+create index 회원_x011 on 회원(생년);
+create index 회원_x022 on 회원(생년, 생월일, 암호화된_전화번호);
+create index 회원_x033 on 회원(생년, 암호화된_전화번호);
+
+explain plan for
+select /*+ index(a 회원_x011) no_batch_table_access_by_rowid(a) */
+    회원번호, 회원명, 생년, 생월일, 등록일자
+from 회원 a
+where 생년 = '1987'
+and 암호화된_전화번호 = encryption(:phone_no);
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ index(a 회원_x022) no_batch_table_access_by_rowid(a) */
+    회원번호, 회원명, 생년, 생월일, 등록일자
+from 회원 a
+where 생년 = '1987'
+and 암호화된_전화번호 = encryption(:phone_no);
+
+select * from table(dbms_xplan.display());
+
+explain plan for
+select /*+ index(a 회원_x033) no_batch_table_access_by_rowid(a) */
+    회원번호, 회원명, 생년, 생월일, 등록일자
+from 회원 a
+where 생년 = '1987'
+and 암호화된_전화번호 = encryption(:phone_no);
+
+select * from table(dbms_xplan.display());
+
+drop function encryption;
+
+drop table 회원;
+--------------------------------------------------------------------------------
+-- 3.4 인덱스 설계
+--------------------------------------------------------------------------------
