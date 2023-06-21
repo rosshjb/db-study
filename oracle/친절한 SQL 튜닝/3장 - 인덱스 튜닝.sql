@@ -1144,7 +1144,7 @@ select * from table(dbms_xplan.display());
 explain plan for
 select /*+ no_batch_table_access_by_rowid(거래)
            index(@set$2a13af86_2 거래@set$2a13af86_2 거래_idx11)
-           index(@SET$2a13af86_1 거래@set$2a13af86_1 거래_idx22) */ * from 거래
+           index(@set$2a13af86_1 거래@set$2a13af86_1 거래_idx22) */ * from 거래
 where 고객id = nvl(:cust_id, 고객id)
 and 거래일자 between :dt1 and :dt2;
 
@@ -1320,3 +1320,173 @@ drop table 회원;
 --------------------------------------------------------------------------------
 -- 3.4 인덱스 설계
 --------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 3.4.3 스캔 효율성 이외의 판단 기준
+--------------------------------------------------------------------------------
+create table 거래(
+    고객번호 number(10),
+    상품번호 number(10),
+    거래일자 varchar2(8),
+    거래량 number(10),
+    거래금액 number(10),
+    거래구분코드 varchar2(2)
+);
+
+create index 거래_idx on 거래(거래일자, 거래구분코드);
+
+create table 상품(
+    상품번호 number(10),
+    상품코드 varchar2(10),
+    상품명 varchar2(10),
+    상품분류 varchar2(10)
+);
+
+create index 상품_idx on 상품(상품분류, 상품번호);
+drop index 상품_idx;
+
+explain plan for
+select /*+ leading(a) use_nl(b)
+         no_batch_table_access_by_rowid(a)
+         no_batch_table_access_by_rowid(b)
+         no_nlj_prefetch(b) opt_param('_nlj_batching_enabled', 0) */
+    b.상품코드, b.상품명, a.고객번호, a.거래일자, a.거래량, a.거래금액
+from 거래 a, 상품 b
+where a.거래일자 between '20090101' and '20090131'
+and a.거래구분코드 = 'AC'
+and b.상품번호 = a.상품번호
+and b.상품분류 = '가전';
+
+select * from table(dbms_xplan.display);
+
+drop index 거래_idx;
+create index 거래_idx on 거래(거래일자, 상품번호, 거래구분코드);
+
+explain plan for
+select /*+ leading(b) use_nl(a)
+           no_batch_table_access_by_rowid(a)
+           no_batch_table_access_by_rowid(b)
+           no_nlj_prefetch(a) opt_param('_nlj_batching_enabled', 0) */
+    b.상품코드, b.상품명, a.고객번호, a.거래일자, a.거래량, a.거래금액
+from 거래 a, 상품 b
+where a.거래일자 between '20090101' and '20090131'
+and a.거래구분코드 = 'AC'
+and b.상품번호 = a.상품번호
+and b.상품분류 = '가전';
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 상품;
+--------------------------------------------------------------------------------
+-- 3.4.5 소트 연산을 생략하기 위한 컬럼 추가
+--------------------------------------------------------------------------------
+create table 계약(
+    계약id varchar2(10),
+    청약일자 date,
+    입력자id varchar2(10),
+    계약상태코드 varchar2(10),
+    보험시작일자 date,
+    보험종료일자 date,
+    취급지점id varchar2(10),
+    입력일자 date
+);
+
+create index 계약_idx on 계약(취급지점id, 청약일자, 입력자id);
+
+explain plan for
+select 계약id, 청약일자, 입력자id, 계약상태코드, 보험시작일자, 보험종료일자
+from 계약
+where 취급지점id = :trt_brch_id
+and 청약일자 between :sbcp_dt1 and :sbcp_dt2
+and 입력일자 >= trunc(sysdate - 3)
+and 계약상태코드 in (:ctr_stat_cd1, :ctr_stat_cd2, :ctr_stat_cd3)
+order by 청약일자, 입력자id;
+
+select * from table(dbms_xplan.display);
+
+drop table 계약;
+--------------------------------------------------------------------------------
+-- in 조건은 '='이 아니다
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10),
+    고객명 varchar2(10),
+    거주지역 varchar2(10),
+    혈액형 varchar2(10),
+    연령 number(10)
+);
+
+create index 고객_idx on 고객(거주지역, 혈액형, 연령);
+
+explain plan for
+select /*+ num_index_keys(고객 고객_idx 2) no_batch_table_access_by_rowid(고객) */
+    고객번호, 고객명, 거주지역, 혈액형, 연령
+from 고객
+where 거주지역 = '서울'
+and 혈액형 in ('A', 'O')
+order by 연령;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객) */
+    고객번호, 고객명, 거주지역, 혈액형, 연령
+from 고객
+where 거주지역 = '서울'
+and 혈액형 = 'A'
+union all
+select /*+ no_batch_table_access_by_rowid(고객) */
+    고객번호, 고객명, 거주지역, 혈액형, 연령
+from 고객
+where 거주지역 = '서울'
+and 혈액형 = 'B'
+order by 연령;
+
+select * from table(dbms_xplan.display);
+
+drop index 고객_idx;
+
+create index 고객_idx on 고객(혈액형, 거주지역, 연령);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객) */
+    고객번호, 고객명, 거주지역, 혈액형, 연령
+from 고객
+where 혈액형 in ('A', 'O')
+and 거주지역 = '서울'
+order by 연령;
+
+select * from table(dbms_xplan.display);
+
+drop index 고객_idx;
+
+create index 고객_idx on 고객(거주지역, 연령, 혈액형);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(고객) */
+    고객번호, 고객명, 거주지역, 혈액형, 연령
+from 고객
+where 혈액형 in ('A', 'O')
+and 거주지역 = '서울'
+order by 연령;
+
+select * from table(dbms_xplan.display);
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- 3.4.6 결합 인덱스 선택도
+--------------------------------------------------------------------------------
+create table 계약조직(
+    계약id number(10),
+    취급지점id varchar2(10)
+);
+
+select count(*) as ndv, max(cnt) as mx_card, min(cnt) as mn_card, avg(cnt) as avg_card
+from (
+    select 계약id, 취급지점id, count(*) as cnt
+    from 계약조직
+    where (계약id is not null or 취급지점id is not null)
+    group by 계약id, 취급지점id
+);
+
+drop table 계약조직;
