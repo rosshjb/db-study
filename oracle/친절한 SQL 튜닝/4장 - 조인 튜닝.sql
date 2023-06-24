@@ -481,5 +481,377 @@ drop table t3;
 drop table t2;
 drop table t1;
 --------------------------------------------------------------------------------
--- 4.3.5 조인 메소드 선택 기준
+-- 4.4 서브쿼리 조인
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 4.4.1 서브쿼리 변환이 필요한 이유
+--------------------------------------------------------------------------------
+create table 고객분류(
+    고객분류코드 varchar2(5) constraint 고객분류_pk primary key,
+    고객분류명 varchar2(10)
+);
+
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    고객명 varchar2(10),
+    고객분류코드 varchar2(5) constraint 고객_fk references 고객분류(고객분류코드),
+    가입일시 timestamp,
+    최종변경일시 timestamp
+);
+
+create table 고객변경이력(
+    고객번호 number(10) constraint 고객변경이력_fk references 고객(고객번호),
+    시작일시 timestamp,
+    종료일시 timestamp,
+    변경사유코드 varchar2(3),
+    constraint 고객변경이력_pk primary key (고객번호, 시작일시)
+);
+
+create table 거래(
+    고객번호 number(10) constraint 거래_fk references 고객(고객번호),
+    거래일시 timestamp,
+    거래금액 number(10),
+    constraint 거래_pk primary key (고객번호, 거래일시)
+);
+
+explain plan for
+select c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래,
+       (select 고객분류명 from 고객분류 where 고객분류코드 = c.고객분류코드)
+from 고객 c,
+     (
+        select 고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호
+and exists (
+    select 'x'
+    from 고객변경이력 h
+    where h.고객번호 = c.고객번호
+    and h.변경사유코드 = 'ZCH'
+    and c.최종변경일시 between h.시작일시 and h.종료일시
+);
+
+select * from table(dbms_xplan.display);
+-- 중첩된 서브쿼리
+explain plan for
+select c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and exists (
+    select 'x'
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(sysdate, 'mm')
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select 'x'
+from 거래
+where 고객번호 = :cust_no
+and 거래일시 >= trunc(sysdate, 'mm');
+
+select * from table(dbms_xplan.display);
+
+-- 인라인 뷰
+explain plan for
+select c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (
+        select 고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     -- sys_vw_temp t
+     (select 'sys_vw_temp' 고객번호,'sys_vw_temp' 평균거래, 'sys_vw_temp' 최소거래, 'sys_vw_temp' 최대거래
+      from dual) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select 고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+from 거래
+where 거래일시 >= trunc(sysdate, 'mm')
+group by 고객번호;
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 고객변경이력;
+drop table 고객;
+drop table 고객분류;
+--------------------------------------------------------------------------------
+-- 4.4.2 서브쿼리와 조인
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 필터 오퍼레이션
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    고객명 varchar2(10),
+    가입일시 timestamp
+);
+
+create index 고객_x01 on 고객(가입일시);
+
+create table 거래(
+    고객번호 number(10) constraint 거래_fk references 고객(고객번호),
+    거래일시 timestamp
+);
+
+create index 거래_x01 on 거래(고객번호, 거래일시);
+alter table 거래 add constraint 거래_pk primary key (고객번호, 거래일시) using index 거래_x01;
+
+explain plan for
+select
+    /*+ no_batch_table_access_by_rowid(c) */
+    c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and exists (
+    select /*+ no_unnest index(거래) */ 'x'
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(sysdate, 'mm')
+);
+
+select * from table(dbms_xplan.display);
+--------------------------------------------------------------------------------
+-- 서브쿼리 unnesting
+--------------------------------------------------------------------------------
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c) */
+    c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and exists (
+    select /*+ unnest nl_sj */ 'x'
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(sysdate, 'mm')
+);
+
+select * from table(dbms_xplan.display);
+
+create index 거래_x02 on 거래(거래일시);
+
+explain plan for
+select /*+ leading(거래@subq) use_nl(c) */
+    c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and exists (
+    select /*+ no_batch_table_access_by_rowid(거래) qb_name(subq) unnest */ 'x'
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(sysdate, 'mm')
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_merge(t)  leading(t)  use_nl(c) no_batch_table_access_by_rowid(c) */
+    c.고객번호, c.고객명
+from (
+    select /*+ no_push_pred no_batch_table_access_by_rowid(거래) no_use_hash_aggregation */ distinct 고객번호
+    from 거래
+    where 거래일시 >= trunc(sysdate, 'mm')
+) t, 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and c.고객번호 = t.고객번호;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c)
+           no_batch_table_access_by_rowid(거래@subq) */
+    c.고객번호, c.고객명
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and exists (
+    select /*+ unnest hash_sj qb_name(subq) */ 'x'
+    from 거래
+    where 고객번호 = c.고객번호
+    and 거래일시 >= trunc(sysdate, 'mm')
+);
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 고객;
+--------------------------------------------------------------------------------
+-- rownum - 잘 쓰면 약, 잘못 쓰면 독
+--------------------------------------------------------------------------------
+create table 게시판(
+    글번호 number(10),
+    제목 varchar2(10),
+    작성자 varchar2(10),
+    등록일시 timestamp,
+    게시판구분 varchar2(10)
+);
+
+create index 게시판_idx on 게시판(게시판구분, 등록일시);
+
+create table 수신대상자(
+    글번호 number(10),
+    수신자 number(10),
+    수신대상자 number(10)
+);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(게시판) */
+    글번호, 제목, 작성자, 등록일시
+from 게시판
+where 게시판구분 = '공지'
+and 등록일시 >= trunc(sysdate-1)
+and rownum <= :n;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(b) */
+    글번호, 제목, 작성자, 등록일시
+from 게시판 b
+where 게시판구분 = '공지'
+and 등록일시 >= trunc(sysdate - 1)
+and exists (
+    select 'x'
+    from 수신대상자
+    where 글번호 = b.글번호
+    and 수신자 = :memb_no
+    and rownum <= 1
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(b) */
+    글번호, 제목, 작성자, 등록일시
+from 게시판 b
+where 게시판구분 = '공지'
+and 등록일시 >= trunc(sysdate - 1)
+and exists (
+    select 'x'
+    from 수신대상자
+    where 글번호 = b.글번호
+    and 수신자 = :memb_no
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(b) */
+    글번호, 제목, 작성자, 등록일시
+from 게시판 b
+where 게시판구분 = '공지'
+and 등록일시 >= trunc(sysdate - 1)
+and exists (
+    select /*+ unnest nl_sj */ 'x'
+    from 수신대상자
+    where 글번호 = b.글번호
+    and 수신자 = :memb_no
+    and rownum <= 1
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(b) */
+    글번호, 제목, 작성자, 등록일시
+from 게시판 b
+where 게시판구분 = '공지'
+and 등록일시 >= trunc(sysdate - 1)
+and exists (
+    select /*+ unnest nl_sj */ 'x'
+    from 수신대상자
+    where 글번호 = b.글번호
+    and 수신자 = :memb_no
+);
+
+select * from table(dbms_xplan.display);
+
+drop table 수신대상자;
+drop table 게시판;
+--------------------------------------------------------------------------------
+-- 서브쿼리 pushing
+--------------------------------------------------------------------------------
+create table 상품분류(
+    상품분류코드 varchar2(2) constraint 상품분류_pk primary key,
+    상위분류코드 varchar2(2)
+);
+
+create table 상품(
+    상품번호 number(10) constraint 상품_pk primary key,
+    상품분류코드 varchar2(2) constraint 상품분류코드_fk references 상품분류(상품분류코드),
+    등록일시 timestamp
+);
+
+create table 주문(
+    상품번호 number(10) constraint 주문_fk references 상품(상품번호),
+    주문일시 timestamp,
+    주문금액 number(10),
+    constraint 주문_pk primary key (상품번호, 주문일시)
+);
+
+explain plan for
+select /*+ leading(p) use_nl(t)
+           index(t) no_nlj_prefetch(t) opt_param('_nlj_batching_enabled', 0)
+           no_batch_table_access_by_rowid(t) */
+    count(distinct p.상품번호), sum(t.주문금액)
+from 상품 p, 주문 t
+where p.상품번호 = t.상품번호
+and p.등록일시 >= trunc(add_months(sysdate, -3), 'mm')
+and t.주문일시 >= trunc(sysdate - 7)
+and exists (
+    select /*+ no_unnest no_push_subq */ 'x' from 상품분류
+    where 상품분류코드 = p.상품분류코드
+    and 상위분류코드 = 'AK'
+);
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ leading(p) use_nl(t)
+           index(t) no_nlj_prefetch(t) opt_param('_nlj_batching_enabled', 0)
+           no_batch_table_access_by_rowid(t) */
+    count(distinct p.상품번호), sum(t.주문금액)
+from 상품 p, 주문 t
+where p.상품번호 = t.상품번호
+and p.등록일시 >= trunc(add_months(sysdate, -3), 'mm')
+and t.주문일시 >= trunc(sysdate - 7)
+and exists (
+    select /*+ no_unnest push_subq */ 'x' from 상품분류
+    where 상품분류코드 = p.상품분류코드
+    and 상위분류코드 = 'AK'
+);
+
+select * from table(dbms_xplan.display);
+
+drop table 주문;
+drop table 상품;
+drop table 상품분류;
+--------------------------------------------------------------------------------
+-- 4.4.3 뷰(view)와 조인
 --------------------------------------------------------------------------------
