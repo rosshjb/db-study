@@ -855,3 +855,485 @@ drop table 상품분류;
 --------------------------------------------------------------------------------
 -- 4.4.3 뷰(view)와 조인
 --------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    고객명 varchar2(10),
+    가입일시 timestamp
+);
+
+create index 고객_x011 on 고객(가입일시);
+
+create table 거래(
+    고객번호 number(10) constraint 거래_고객_fk references 고객(고객번호),
+    거래일시 timestamp,
+    거래금액 number(10)
+);
+
+create index 거래_x011 on 거래(거래일시);
+
+explain plan for
+select c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (
+        select /*+ no_batch_table_access_by_rowid(거래) */
+            고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+
+drop index 거래_x011;
+create index 거래_x022 on 거래(고객번호, 거래일시);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c) no_batch_table_access_by_rowid(t)
+           no_nlj_prefetch(t) opt_param('_nlj_batching_enabled', 0) */
+    c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (
+        select /*+ merge */
+            고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select
+    /*+ no_batch_table_access_by_rowid(c) no_batch_table_access_by_rowid(t)
+        no_nlj_prefetch(t) opt_param('_nlj_batching_enabled', 0)
+        no_place_group_by(t) */
+    c.고객번호, c.고객명,
+    avg(t.거래금액) 평균거래, min(t.거래금액) 최소거래, max(t.거래금액) 최대거래
+from 고객 c, 거래 t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호
+and t.거래일시 >= trunc(sysdate, 'mm')
+group by c.고객번호, c.고객명;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ full(c) full(t) leading(c) use_hash(t)
+           no_batch_table_access_by_rowid(c) no_batch_table_access_by_rowid(t) */
+    c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (
+        select /*+ merge */
+            고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+--------------------------------------------------------------------------------
+-- 조인 조건 pushdown
+--------------------------------------------------------------------------------
+explain plan for
+select
+    c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (
+        select /*+ no_merge push_pred */
+            고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        group by 고객번호
+     ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호 = c.고객번호;
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 고객;
+--------------------------------------------------------------------------------
+-- lateral 인라인 뷰, cross/outer apply 조인
+--------------------------------------------------------------------------------
+-- lateral 인라인 뷰
+create table 조직(
+    조직코드 varchar2(4) constraint 조직_pk primary key,
+    조직명 varchar2(10)
+);
+
+create table 사원(
+    사원코드 number(10) constraint 사원_pk primary key,
+    조직코드 varchar2(4) constraint 사원_조직_fk references 조직(조직코드)
+);
+
+create table 사원변경이력(
+    사원코드 number(10) constraint 사원변경이력_사원_fk references 사원(사원코드),
+    변경일시 timestamp
+);
+
+select *
+from 사원 e, lateral (select * from 조직 where 조직코드 = e.조직코드);
+
+select *
+from 사원 e, lateral (select * from 조직 where 조직코드 = e.조직코드)(+);
+
+-- outer apply 조인
+select *
+from 사원 e
+outer apply (select * from 조직 where 조직코드 = e.조직코드);
+
+-- cross apply 조인
+select *
+from 사원 e
+cross apply (select * from 조직 where 조직코드 = e.조직코드);
+
+-- 실행계획 제어가 어려운 사례
+select *
+from 사원 e, lateral (select * from (
+                                        select * from 사원변경이력
+                                        where 사원코드 = e.사원코드
+                                        order by 변경일시 desc
+                                    )
+                      where rownum <= 5
+                     );
+
+drop table 사원변경이력;
+drop table 사원;
+drop table 조직;
+--------------------------------------------------------------------------------
+-- 4.4.4 스칼라 서브쿼리 조인
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- (1) 스칼라 서브쿼리의 특징
+--------------------------------------------------------------------------------
+create or replace function get_dname(p_deptno number) return varchar2
+is
+    l_dname dept.dname%type;
+begin
+    select dname into l_dname from dept where deptno = p_deptno;
+    return l_dname;
+exception
+    when others then
+        return null;
+end;
+/
+
+create index 사원_idx on emp(sal);
+
+select /*+ gather_plan_statistics no_batch_table_access_by_rowid(e) */
+    empno, ename, sal, hiredate, get_dname(e.deptno) as dname
+from emp e
+where sal >= 2000;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+select /*+ ordered use_nl(d)
+           gather_plan_statistics no_batch_table_access_by_rowid(e) */
+    e.empno, e.ename, e.sal, e.hiredate, d.dname
+from emp e, dept d
+where d.deptno(+) = e.deptno
+and e.sal >= 2000;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+--------------------------------------------------------------------------------
+-- (2) 스칼라 서브쿼리 캐싱 효과
+--------------------------------------------------------------------------------
+select empno, ename, sal, hiredate,
+       (
+            select d.dname
+            from dept d
+            where d.deptno = e.deptno
+       )
+from emp e
+where sal >= 2000;
+
+select /*+ gather_plan_statistics no_batch_table_access_by_rowid(e) */
+    empno, ename, sal, hiredate, (select get_dname(e.deptno) from dual) dname
+from emp e
+where sal >= 2000;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop function get_dname;
+drop index 사원_idx;
+--------------------------------------------------------------------------------
+-- (3) 스칼라 서브쿼리 캐싱 부작용
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    고객명 varchar2(10)
+);
+
+create table 거래구분(
+    거래구분코드 varchar2(10) constraint 거래구분_pk primary key,
+    거래구분명 varchar2(10)
+);
+
+create table 거래(
+    거래번호 number(10),
+    고객번호 number(10) constraint 거래_고객_fk references 고객(고객번호),
+    거래일자 date,
+    영업조직id varchar2(10),
+    거래구분코드 varchar2(10) constraint 거래_거래구분_fk references 거래구분(거래구분코드),
+    constraint 거래_pk primary key (거래번호, 고객번호, 거래일자)
+);
+
+explain plan for
+select 거래번호, 고객번호, 영업조직id, 거래구분코드,
+       (select /*+ no_unnest */ 거래구분명 from 거래구분 where 거래구분코드 = t.거래구분코드) 거래구분명
+from 거래 t
+where 거래일자 >= to_char(add_months(sysdate, -3), 'yyyymmdd');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select 거래번호, 고객번호, 영업조직id, 거래구분코드,
+       (select /*+ no_unnest */ 고객명 from 고객 where 고객번호 = t.고객번호) 고객명
+from 거래 t
+where 거래일자 >= to_char(add_months(sysdate, -3), 'yyyymmdd');
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 거래구분;
+drop table 고객;
+
+create or replace function acnt_nm(acnt_no varchar2) return varchar2
+is
+begin
+    return acnt_no || 'acnt_nm';
+end;
+/
+
+create table 체결(
+    매도회원번호 number(10),
+    매수회원번호 number(10),
+    매도투자자구분코드 varchar2(10),
+    매수투자자구분코드 varchar2(10),
+    체결유형코드 varchar2(10),
+    매도계좌번호 varchar2(10),
+    매수계좌번호 varchar2(10),
+    체결일자 varchar2(8),
+    체결시각 date,
+    체결수량 number(10),
+    체결가 number(10),
+    종목코드 varchar2(10)
+);
+
+explain plan for
+select 매도회원번호, 매수회원번호, 매도투자자구분코드, 매수투자자구분코드, 체결유형코드,
+       매도계좌번호, (select acnt_nm(매도계좌번호) from dual) 매도계좌명,
+       매수계좌번호, (select acnt_nm(매수계좌번호) from dual) 매수계좌명,
+       체결시각, 체결수량, 체결가, 체결수량 * 체결가 체결금액
+from 체결
+where 종목코드 = :종목코드
+and 체결일자 = :체결일자
+and 체결시각 between sysdate - 10/24/60 and sysdate;
+
+select * from table(dbms_xplan.display);
+
+drop function acnt_nm;
+drop table 체결;
+
+create table 계좌(
+    계좌번호 varchar2(10),
+    계좌명 varchar2(10),
+    고객번호 number(10),
+    개설일자 timestamp,
+    계좌종류구분코드 varchar2(10),
+    은행개설여부 varchar2(1),
+    은행연계여부 varchar2(1),
+    관리지점코드 varchar2(10),
+    개설지점코드 varchar2(10)
+);
+
+create or replace function brch_nm(brch_code varchar2) return varchar2
+is
+begin
+    return brch_code || 'brch_nm';
+end;
+/
+
+explain plan for
+select 계좌번호, 계좌명, 고객번호, 개설일자, 계좌종류구분코드, 은행개설여부, 은행연계여부,
+    (select brch_nm(관리지점코드) from dual) 관리지점명,
+    (select brch_nm(개설지점코드) from dual) 개설지점명
+from 계좌
+where 고객번호 = :고객번호;
+
+select * from table(dbms_xplan.display);
+
+drop function brch_nm;
+drop table 계좌;
+--------------------------------------------------------------------------------
+-- (4) 두 개 이상의 값 반환
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    고객명 varchar2(10),
+    가입일시 timestamp
+);
+
+create index 고객_x011 on 고객(가입일시);
+
+create table 거래(
+    고객번호 number(10) constraint 거래_고객_fk references 고객(고객번호),
+    거래일시 timestamp,
+    거래금액 number(10)
+);
+
+create index 거래_x022 on 거래(고객번호, 거래일시);
+
+alter table 거래 add constraint 거래_x022 primary key (고객번호, 거래일시) using index 거래_x022;
+
+explain plan for
+select c.고객번호, c.고객명,
+       (select /*+ no_unnest no_batch_table_access_by_rowid(거래) */
+            round(avg(거래금액), 2) 평균거래금액
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        and 고객번호 = c.고객번호)
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select c.고객번호, c.고객명,
+       (select /*+ no_unnest no_batch_table_access_by_rowid(거래) */
+        avg(거래금액) 평균거래금액 from 거래
+        where 거래일시 >= trunc(sysdate, 'mm') and 고객번호 = c.고객번호),
+       (select /*+ no_unnest no_batch_table_access_by_rowid(거래) */
+        min(거래금액) from 거래
+        where 거래일시 >= trunc(sysdate, 'mm') and 고객번호 = c.고객번호),
+       (select /*+ no_unnest no_batch_table_access_by_rowid(거래) */
+        max(거래금액) from 거래
+        where 거래일시 >= trunc(sysdate, 'mm') and 고객번호 = c.고객번호)
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select
+       고객번호, 고객명,
+       to_number(substr(거래금액, 1, 10)) 평균거래금액,
+       to_number(substr(거래금액, 11, 10)) 최소거래금액,
+       to_number(substr(거래금액, 21)) 최대거래금액
+from (
+    select /*+ no_batch_table_access_by_rowid(c) */
+           c.고객번호, c.고객명,
+           (select /*+ no_batch_table_access_by_rowid(거래) */
+                lpad(avg(거래금액), 10) || lpad(min(거래금액), 10) || max(거래금액)
+            from 거래
+            where 거래일시 >= trunc(sysdate, 'mm')
+            and 고객번호 = c.고객번호) 거래금액
+    from 고객 c
+    where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+);
+
+select * from table(dbms_xplan.display);
+
+create or replace type 거래금액_t as object
+(평균거래금액 number, 최소거래금액 number, 최대거래금액 number);
+/
+
+explain plan for
+select 고객번호, 고객명, 거래.금액.평균거래금액, 거래.금액.최소거래금액, 거래.금액.최대거래금액
+from (
+    select /*+ no_batch_table_access_by_rowid(c) */
+           c.고객번호, c.고객명,
+           (select /*+ no_batch_table_access_by_rowid(거래) */
+                거래금액_t(avg(거래금액), min(거래금액), max(거래금액))
+            from 거래
+            where 거래일시 >= trunc(sysdate, 'mm')
+            and 고객번호 = c.고객번호) 금액
+    from 고객 c
+    where 고객번호 = c.고객번호
+    and c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+) 거래;
+
+select * from table(dbms_xplan.display);
+
+drop type 거래금액_t;
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c) */
+    c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (select /*+ merge no_batch_table_access_by_rowid(거래) */
+        고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+      from 거래
+      where 거래일시 >= trunc(sysdate, 'mm')
+      group by 고객번호
+      ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호(+) = c.고객번호;
+
+select * from table(dbms_xplan.display(format=>'alias'));
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c) */
+    c.고객번호, c.고객명, t.평균거래, t.최소거래, t.최대거래
+from 고객 c,
+     (select /*+ no_merge push_pred
+                 no_batch_table_access_by_rowid(거래) */
+        고객번호, avg(거래금액) 평균거래, min(거래금액) 최소거래, max(거래금액) 최대거래
+      from 거래
+      where 거래일시 >= trunc(sysdate, 'mm')
+      group by 고객번호
+      ) t
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm')
+and t.고객번호(+) = c.고객번호;
+
+select * from table(dbms_xplan.display);
+--------------------------------------------------------------------------------
+-- (5) 스칼라 서브쿼리 unnesting
+--------------------------------------------------------------------------------
+explain plan for
+select /*+ full(c) */
+       c.고객번호, c.고객명,
+       (select /*+ unnest full(거래) */
+            round(avg(거래금액), 2) 평균거래금액
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        and 고객번호 = c.고객번호)
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ full(c) */ 
+       c.고객번호, c.고객명,
+       (select /*+ unnest merge full(거래) */
+            round(avg(거래금액), 2) 평균거래금액
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        and 고객번호 = c.고객번호)
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select /*+ no_batch_table_access_by_rowid(c) */
+       c.고객번호, c.고객명,
+       (select /*+ no_unnest no_batch_table_access_by_rowid(거래) */
+            round(avg(거래금액), 2) 평균거래금액
+        from 거래
+        where 거래일시 >= trunc(sysdate, 'mm')
+        and 고객번호 = c.고객번호)
+from 고객 c
+where c.가입일시 >= trunc(add_months(sysdate, -1), 'mm');
+
+select * from table(dbms_xplan.display);
+
+drop table 거래;
+drop table 고객;
