@@ -817,6 +817,184 @@ and h.장비번호 = p.장비번호
 and :base_dt between h.유효시작일자 and h.유효종료일자;
 
 select * from table(dbms_xplan.display);
+
+drop table 상태변경이력;
+drop table 장비;
 --------------------------------------------------------------------------------
 -- 5.3.5 sort group by 생략
 --------------------------------------------------------------------------------
+create table customer(
+    custid number(10) constraint customer_pk primary key,
+    region varchar2(1) not null,
+    age number(10)
+);
+
+create index customer_x01 on customer(region);
+
+explain plan for
+select /*+ index(customer) */
+    region, avg(age), count(*)
+from customer
+group by region;
+
+select * from table(dbms_xplan.display);
+
+drop table customer;
+--------------------------------------------------------------------------------
+-- 5.4 sort area를 적게 사용하도록 sql 작성
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 5.4.1 소트 데이터 줄이기
+--------------------------------------------------------------------------------
+create table 주문상품(
+    상품번호 number(10),
+    상품명 varchar2(10),
+    고객id varchar2(10),
+    고객명 varchar2(10),
+    주문일시 timestamp
+);
+
+explain plan for
+select lpad(상품번호, 30) || lpad(상품명, 30) || lpad(고객id, 10)
+       || lpad(고객명, 20) || to_char(주문일시, 'yyyymmdd hh24:mi:ss')
+from 주문상품
+where 주문일시 between :start_dt and :end_dt
+order by 상품번호;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select lpad(상품번호, 30) || lpad(상품명, 30) || lpad(고객id, 10)
+       || lpad(고객명, 20) || to_char(주문일시, 'yyyymmdd hh24:mi:ss')
+from (
+    select 상품번호, 상품명, 고객id, 고객명, 주문일시
+    from 주문상품
+    where 주문일시 between :start_dt and :end_dt
+    order by 상품번호
+);
+
+select * from table(dbms_xplan.display);
+
+drop table 주문상품;
+
+create table 예수금원장(
+    계좌번호 varchar2(10),
+    총예수금 number(10),
+    dummy number(10)
+);
+
+explain plan for
+select * from 예수금원장
+order by 총예수금 desc;
+
+select * from table(dbms_xplan.display);
+
+explain plan for
+select 계좌번호, 총예수금 from 예수금원장
+order by 총예수금 desc;
+
+select * from table(dbms_xplan.display);
+
+drop table 예수금원장;
+--------------------------------------------------------------------------------
+-- 5.4.2 top n 쿼리의 소트 부하 경감 원리
+--------------------------------------------------------------------------------
+create table 종목거래(
+    거래일시 varchar2(8),
+    체결건수 number(10),
+    체결수량 number(10),
+    거래대금 number(10),
+    종목코드 varchar2(8)
+);
+
+set autotrace on;
+alter session set workarea_size_policy = manual;
+alter session set sort_area_size = 524288;
+
+select *
+from (
+    select rownum no, a.*
+    from (
+        select 거래일시, 체결건수, 체결수량, 거래대금
+        from 종목거래
+        where 종목코드 = 'KR123456'
+        and 거래일시 >= '20180304'
+        order by 거래일시) a
+    where rownum <= (:page * 10)
+) where no >= (:page - 1) * 10 + 1;
+
+alter session set workarea_size_policy = auto;
+alter session set sort_area_size = 65536;
+set autotrace off;
+
+--------------------------------------------------------------------------------
+-- 5.4.3 top n 쿼리가 아닐 때 발생하는 소트 부하
+--------------------------------------------------------------------------------
+set autotrace on;
+alter session set workarea_size_policy = manual;
+alter session set sort_area_size = 524288;
+
+select *
+from (
+    select rownum no, a.*
+    from (
+        select 거래일시, 체결건수, 체결수량, 거래대금
+        from 종목거래
+        where 종목코드 = 'KR123456'
+        and 거래일시 >= '20180304'
+        order by 거래일시) a
+) where no between (:page - 1) * 10 + 1 and (:page * 10);
+
+alter session set workarea_size_policy = auto;
+alter session set sort_area_size = 65536;
+set autotrace off;
+
+drop table 종목거래;
+--------------------------------------------------------------------------------
+-- 5.4.4 분석함수에서의 top n 소트
+--------------------------------------------------------------------------------
+create table 장비(
+    장비번호 number(10) constraint 장비_pk primary key,
+    장비명 varchar2(10),
+    장비구분코드 varchar2(4),
+    상태코드 varchar2(4),
+    최종변경일자 varchar2(8)
+);
+
+create index 장비_n1 on 장비(장비구분코드);
+
+create table 상태변경이력(
+    장비번호 number(10),
+    변경일자 varchar2(8),
+    변경순번 number(10),
+    상태코드 varchar2(4),
+    메모 varchar2(10),
+    constraint 상태변경이력_pk primary key (장비번호, 변경일자, 변경순번)
+);
+
+set autotrace on;
+alter session set workarea_size_policy = manual;
+alter session set sort_area_size = 524288;
+
+select 장비번호, 변경일자, 변경순번, 상태코드, 메모
+from (
+    select 장비번호, 변경일자, 변경순번, 상태코드, 메모,
+           max(변경순번) over (partition by 장비번호) 최종변경순번
+    from 상태변경이력
+    where 변경일자 = :upd_dt)
+where 변경순번 = 최종변경순번;
+
+select 장비번호, 변경일자, 변경순번, 상태코드, 메모
+from (
+    select 장비번호, 변경일자, 변경순번, 상태코드, 메모,
+           rank() over (partition by 장비번호 order by 변경순번 desc) rnum
+    from 상태변경이력
+    where 변경일자 = :upd_dt)
+where rnum = 1;
+
+alter session set workarea_size_policy = auto;
+alter session set sort_area_size = 65536;
+set autotrace off;
+
+drop table 상태변경이력;
+drop table 장비;
