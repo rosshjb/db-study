@@ -302,6 +302,9 @@ alter index target_x1 rebuild;
 alter index target_pk rebuild;
 
 alter table target modify constraint target_pk enable novalidate;
+
+drop table source;
+drop table target;
 --------------------------------------------------------------------------------
 -- 6.1.5 수정가능 조인 뷰
 --------------------------------------------------------------------------------
@@ -434,6 +437,9 @@ delete from emp_dept_view where job = 'CLERK';
 alter table dept2 add constraint dept2_pk primary key (deptno);
 
 update emp_dept_view set comm = nvl(comm, 0) + (sal * 0.1) where sal <= 1500;
+
+drop table 거래;
+drop table 고객;
 --------------------------------------------------------------------------------
 -- 키 보존 테이블이란?
 --------------------------------------------------------------------------------
@@ -706,4 +712,319 @@ update (
 drop table emp_src;
 --------------------------------------------------------------------------------
 -- 6.2 direct path i/o 활용
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 6.2.1 direct path i/o
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 병렬 쿼리
+--------------------------------------------------------------------------------
+create table big_table
+as
+select a.no, b.*
+from (select rownum no from dual connect by level <= 10) a,
+     (select * from all_objects) b;
+
+alter table big_table add constraint big_table_pk primary key (no, object_id);
+
+select /*+ gather_plan_statistics full(t) parallel(t 4) */ *
+from big_table t;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+create index big_table_x1 on big_table(no);
+
+select /*+ gather_plan_statistics
+           index_ffs(t big_table_x1) parallel_index(t big_table_x1 4) */ count(*)
+from big_table t;
+
+select * from table(dbms_xplan.display_cursor(format => 'advanced allstats last'));
+
+drop table big_table;
+--------------------------------------------------------------------------------
+-- 6.2.2 direct path insert
+--------------------------------------------------------------------------------
+create table source
+as
+select b.no, a.*
+from (select * from emp where rownum <= 10) a,
+     (select rownum as no from dual connect by level <= 100000) b;
+
+create table target
+as
+select * from source where 1 = 2;
+
+set timing on;
+
+declare
+    cursor c is select * from source;
+    type typ_source is table of c%rowtype;
+    l_source typ_source;
+
+    l_array_size number default 1000000;
+
+    procedure insert_target(p_source in typ_source) is
+    begin
+        forall i in p_source.first..p_source.last
+            insert /*+ append_values */ into target values p_source(i);
+    end insert_target;
+begin
+    open c;
+
+    loop
+        fetch c bulk collect into l_source limit l_array_size;
+        insert_target(l_source);
+        exit when c%notfound;
+    end loop;
+
+    close c;
+
+    commit;
+end;
+/
+
+set timing off;
+
+drop table source;
+drop table target;
+--------------------------------------------------------------------------------
+-- 6.2.3 병렬 dml
+--------------------------------------------------------------------------------
+create table 고객(
+    고객id varchar2(10) constraint 고객_pk primary key,
+    고객상태코드 varchar2(2),
+    최종거래일시 varchar2(8),
+    탈퇴일시 varchar2(8)
+);
+
+create table 외부가입고객
+as select * from 고객;
+
+alter session enable parallel dml;
+
+insert /*+ parallel(c 4) */ into 고객 c
+select /*+ full(o) parallel(o 4) */ * from 외부가입고객 o;
+
+rollback;
+
+update /*+ full(c) parallel(c 4) */ 고객 c
+set 고객상태코드 = 'WD'
+where 최종거래일시 < '20100101';
+
+rollback;
+
+delete /*+ full(c) parallel(c 4) */ from 고객 c
+where 탈퇴일시 < '20100101';
+
+rollback;
+
+alter session disable parallel dml;
+
+insert /*+ append parallel(c 4) */ into 고객 c
+select /*+ full(o) parallel(o 4) */ * from 외부가입고객 o;
+
+rollback;
+
+insert /*+ enable_parallel_dml parallel(c 4) */ into 고객 c
+select /*+ full(o) parallel(o 4) */ * from 외부가입고객 o;
+
+rollback;
+
+update /*+ enable_parallel_dml full(c) parallel(c 4) */ 고객 c
+set 고객상태코드 = 'WD'
+where 최종거래일시 < '20100101';
+
+rollback;
+
+delete /*+ enable_parallel_dml full(c) parallel(c 4) */ from 고객
+where 탈퇴일시 < '20100101';
+
+rollback;
+--------------------------------------------------------------------------------
+-- 병렬 dml이 잘 작동하는지 확인하는 방법
+--------------------------------------------------------------------------------
+explain plan for
+update /*+ enable_parallel_dml full(c) parallel(c 4) */ 고객 c
+set 고객상태코드 = 'WD'
+where 최종거래일시 < '20100101';
+
+select * from table(dbms_xplan.display);
+
+rollback;
+
+explain plan for
+update /*+ full(c) parallel(c 4) */ 고객 c
+set 고객상태코드 = 'WD'
+where 최종거래일시 < '20100101';
+
+select * from table(dbms_xplan.display);
+
+rollback;
+
+drop table 고객;
+drop table 외부가입고객;
+--------------------------------------------------------------------------------
+-- 6.3 파티션을 활용한 dml 튜닝
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- range 파티션
+--------------------------------------------------------------------------------
+create table 주문(
+    주문번호 number constraint 주문_pk primary key,
+    주문일자 varchar2(8),
+    고객id varchar2(5),
+    배송일자 varchar2(8),
+    주문금액 number
+) partition by range(주문일자) (
+    partition p2017_q1 values less than ('20170401'),
+    partition p2017_q2 values less than ('20170701'),
+    partition p2017_q3 values less than ('20171001'),
+    partition p2017_q4 values less than ('20180101'),
+    partition p2018_q1 values less than ('20180401'),
+    partition p9999_mx values less than (maxvalue)
+);
+
+explain plan for
+select * from 주문
+where 주문일자 >= '20120401' and 주문일자 <= '20120630';
+
+select * from table(dbms_xplan.display);
+
+drop table 주문;
+--------------------------------------------------------------------------------
+-- 해시 파티션
+--------------------------------------------------------------------------------
+create table 고객(
+    고객id varchar2(5) constraint 고객_pk primary key,
+    고객명 varchar2(10)
+) partition by hash(고객id) partitions 4;
+
+explain plan for
+select * from 고객
+where 고객id = 'test';
+
+select * from table(dbms_xplan.display);
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- 리스트 파티션
+--------------------------------------------------------------------------------
+create table 인터넷매물(
+    물건코드 varchar2(5),
+    지역분류 varchar2(6)
+) partition by list(지역분류) (
+    partition p_지역1 values ('서울'),
+    partition p_지역2 values ('경기', '인천'),
+    partition p_지역3 values ('부산', '대구', '대전', '광주'),
+    partition p_기타 values (default)
+);
+
+explain plan for
+select * from 인터넷매물
+where 지역분류 = '서울';
+
+select * from table(dbms_xplan.display);
+
+drop table 인터넷매물;
+--------------------------------------------------------------------------------
+-- 6.3.2 인덱스 파티션
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 로컬 파티션 인덱스
+--------------------------------------------------------------------------------
+create table 주문(
+    주문번호 number constraint 주문_pk primary key,
+    주문일자 varchar2(8),
+    고객id varchar2(5),
+    배송일자 varchar2(8),
+    주문금액 number
+) partition by range(주문일자) (
+    partition p2017_q1 values less than ('20170401'),
+    partition p2017_q2 values less than ('20170701'),
+    partition p2017_q3 values less than ('20171001'),
+    partition p2017_q4 values less than ('20180101'),
+    partition p2018_q1 values less than ('20180401'),
+    partition p9999_mx values less than (maxvalue)
+);
+
+create index 주문_x01 on 주문(주문일자, 주문금액) local;
+
+create index 주문_x02 on 주문(고객id, 주문일자) local;
+--------------------------------------------------------------------------------
+-- 글로벌 파티션 인덱스
+--------------------------------------------------------------------------------
+create index 주문_x03 on 주문(주문금액, 주문일자) global
+partition by range(주문금액) (
+    partition p_01 values less than (100000),
+    partition p_mx values less than (maxvalue)
+);
+--------------------------------------------------------------------------------
+-- 비파티션 인덱스
+--------------------------------------------------------------------------------
+create index 주문_x04 on 주문(고객id, 배송일자);
+--------------------------------------------------------------------------------
+-- prefixed vs. nonprefixed
+--------------------------------------------------------------------------------
+select i.index_name, i.partitioned, p.partitioning_type, p.locality, p.alignment
+from user_indexes i, user_part_indexes p
+where i.table_name = '주문'
+and   p.index_name(+) = i.index_name
+order by i.index_name;
+
+drop table 주문;
+--------------------------------------------------------------------------------
+-- 6.3.3 파티션을 활용한 대량 update 튜닝
+--------------------------------------------------------------------------------
+create table 거래(
+    고객번호 number(10),
+    거래일자 varchar2(8),
+    거래순번 number(10),
+    상태코드 varchar2(3)
+) partition by range(거래일자) (
+    partition p201412 values less than ('20150101'),
+    partition p201501 values less than ('20150201'),
+    partition p201502 values less than ('20150301'),
+    partition p9999mx values less than (maxvalue)
+);
+
+create unique index 거래_pk on 거래(고객번호, 거래일자, 거래순번) local;
+alter table 거래 add primary key (고객번호, 거래일자, 거래순번) using index 거래_pk;
+create index 거래_x11 on 거래(거래일자, 고객번호) local;
+create index 거래_x22 on 거래(상태코드, 거래일자) local;
+
+explain plan for
+update 거래
+set 상태코드 = 'ZZZ'
+where 상태코드 <> 'ZZZ'
+and 거래일자 < '20150101';
+
+select * from table(dbms_xplan.display);
+--------------------------------------------------------------------------------
+-- 파티션 exchange를 이용한 대량 데이터 변경
+--------------------------------------------------------------------------------
+create table 거래_t nologging
+as select * from 거래 where 1 = 2;
+
+insert /*+ append */ into 거래_t
+select 고객번호, 거래일자, 거래순번,
+       (case when 상태코드 <> 'ZZZ' then 'ZZZ' else 상태코드 end) 상태코드
+from 거래
+where 거래일자 < '20150101';
+
+create unique index 거래_t_pk on 거래_t(고객번호, 거래일자, 거래순번) nologging;
+create index 거래_t_x11 on 거래_t(거래일자, 고객번호) nologging;
+create index 거래_t_x22 on 거래_t(상태코드, 거래일자) nologging;
+
+alter table 거래
+exchange partition p201412 with table 거래_t
+including indexes without validation;
+
+drop table 거래_t;
+
+alter table 거래 modify partition p201412 logging;
+alter index 거래_pk modify partition p201412 logging;
+alter index 거래_x11 modify partition p201412 logging;
+alter index 거래_x22 modify partition p201412 logging;
+--------------------------------------------------------------------------------
+-- 6.3.4 파티션을 활용한 대량 delete 튜닝
 --------------------------------------------------------------------------------
