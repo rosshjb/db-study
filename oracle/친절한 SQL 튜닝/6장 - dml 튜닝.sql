@@ -1028,3 +1028,570 @@ alter index 거래_x22 modify partition p201412 logging;
 --------------------------------------------------------------------------------
 -- 6.3.4 파티션을 활용한 대량 delete 튜닝
 --------------------------------------------------------------------------------
+explain plan for
+delete from 거래
+where 거래일자 < '20150101';
+
+select * from table(dbms_xplan.display);
+--------------------------------------------------------------------------------
+-- 파티션 drop을 이용한 대량 데이터 삭제
+--------------------------------------------------------------------------------
+alter table 거래 drop partition p201412;
+
+alter table 거래 split partition p201501
+at ('20150101') into (partition p201412, partition p201501);
+
+alter table 거래 drop partition for ('20141201');
+
+alter table 거래 split partition p201501
+at ('20150101') into (partition p201412, partition p201501);
+--------------------------------------------------------------------------------
+-- 파티션 truncate를 이용한 대량 데이터 삭제
+--------------------------------------------------------------------------------
+explain plan for
+delete from 거래
+where 거래일자 < '20150101'
+and (상태코드 <> 'ZZZ' or 상태코드 is null);
+
+select * from table(dbms_xplan.display);
+
+create table 거래_t as
+select * from 거래
+where 거래일자 < '20150101'
+and 상태코드 = 'ZZZ';
+
+alter table 거래 truncate partition p201412;
+
+alter table 거래 truncate partition for ('20141201');
+
+insert into 거래
+select * from 거래_t;
+
+drop table 거래_t;
+
+drop table 거래;
+--------------------------------------------------------------------------------
+-- 6.3.5 파티션을 활용한 대량 insert 튜닝
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 비파티션 테이블일 때
+--------------------------------------------------------------------------------
+create table source_t
+as select a.no, b.*
+from (select rownum no from dual connect by level <= 100000) a,
+     (select * from emp) b;
+
+create table target_t
+as select * from source_t
+where 1 = 2;
+
+create index target_t_x01 on target_t(no);
+
+alter table target_t nologging;
+
+alter index target_t_x01 unusable;
+
+insert /*+ append */ into target_t
+select * from source_t;
+
+alter index target_t_x01 rebuild nologging;
+
+alter table target_t logging;
+alter index target_t_x01 logging;
+
+drop table target_t;
+drop table source_t;
+--------------------------------------------------------------------------------
+-- 파티션 테이블일 때
+--------------------------------------------------------------------------------
+create table source_t
+partition by range(dt) (
+    partition p_201710 values less than ('20171101'),
+    partition p_201711 values less than ('20171201'),
+    partition p_201712 values less than ('20180101')
+) as select
+        to_char(rownum) dummy,
+        ('2017' || lpad(mod(rownum, 13), 2, '0') || lpad(mod(rownum, 31), 2, '0')) dt
+     from dual connect by level <= 1000000;
+
+create table target_t
+partition by range(dt) (
+    partition p_201710 values less than ('20171101'),
+    partition p_201711 values less than ('20171201'),
+    partition p_201712 values less than ('20180101'))
+as select * from source_t
+where 1 = 2;
+
+create index target_t_x01 on target_t(dt, dummy) local;
+
+alter table target_t modify partition p_201712 nologging;
+
+alter index target_t_x01 modify partition p_201712 unusable;
+
+insert /*+ append */ into target_t
+select * from source_t
+where dt between '20171201' and '20171231';
+
+alter index target_t_x01 rebuild partition p_201712 nologging;
+
+alter table target_t modify partition p_201712 logging;
+alter index target_t_x01 modify partition p_201712 logging;
+
+drop table source_t;
+drop table target_t;
+--------------------------------------------------------------------------------
+-- 6.4 lock과 트랜잭션 동시성 제어
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 6.4.1 오라클 lock
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 대상 리소스가 사용중일 때, 진로 선택
+--------------------------------------------------------------------------------
+create table t as
+select a.no, b.*
+from (select rownum no from dual connect by level <= 10) a,
+     (select * from emp) b;
+
+-- session 1
+select * from t for update; -- (1)
+rollback;                   -- (3)
+
+-- session 2
+select * from t for update; -- (2)
+rollback;                   -- (4)
+
+-- session 1
+select * from t for update; -- (1)
+rollback;                   -- (3)
+
+-- session 2
+select * from t for update wait 3;
+
+-- session 1
+select * from t for update; -- (1)
+rollback;                   -- (3)
+
+-- session 2
+select * from t for update nowait; -- (2)
+
+drop table t;
+
+-- session 1
+select * from emp for update; -- (1)
+rollback;                   -- (3)
+
+-- session 2
+lock table emp in exclusive mode nowait; -- (2)
+--------------------------------------------------------------------------------
+-- lock을 푸는 열쇠, 커밋
+--------------------------------------------------------------------------------
+commit write immediate wait;
+commit write immediate nowait;
+commit write batch wait;
+commit write batch nowait;
+--------------------------------------------------------------------------------
+-- 6.4.2 트랜잭션 동시성 제어
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 비관적 동시성 제어
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    적립포인트 number(10),
+    방문횟수 number(10),
+    최근방문일시 varchar2(8),
+    구매실적 number(10)
+);
+
+select 적립포인트, 방문횟수, 최근방문일시, 구매실적 from 고객
+where 고객번호 = :cust_num;
+
+-- 새로운 적립포인트 계산
+
+update 고객
+set 적립포인트 = :적립포인트
+where 고객번호 = :cust_num;
+
+select 적립포인트, 방문횟수, 최근방문일시, 구매실적 from 고객
+where 고객번호 = :cust_num for update;
+
+rollback;
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- 큐(queue) 테이블 동시성 제어
+--------------------------------------------------------------------------------
+create table cust_rcpt_q(
+    cust_id varchar2(10) constraint cust_rcpt_q_pk primary key,
+    rcpt_amt number(10),
+    yn_upd varchar2(1)
+);
+
+select cust_id, rcpt_amt from cust_rcpt_q
+where yn_upd = 'Y' and rownum <= 100
+for update wait 3;
+
+rollback;
+
+select cust_id, rcpt_amt from cust_rcpt_q
+where yn_upd = 'Y'
+for update skip locked;
+
+rollback;
+
+drop table cust_rcpt_q;
+--------------------------------------------------------------------------------
+-- 낙관적 동시성 제어
+--------------------------------------------------------------------------------
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    적립포인트 number(10),
+    방문횟수 number(10),
+    최근방문일시 varchar2(8),
+    구매실적 number(10)
+);
+
+begin
+    select 적립포인트, 방문횟수, 최근방문일시, 구매실적
+    into :a, :b, :c, :d
+    from 고객
+    where 고객번호 = :cust_num;
+
+    -- 새로운 적립포인트 계산
+
+    update 고객
+    set 적립포인트 = :적립포인트
+    where 고객번호 = :cust_num
+    and 적립포인트 = :a
+    and 방문횟수 = :b
+    and 최근방문일시 = :c
+    and 구매실적 = :d;
+
+    if sql%rowcount = 0 then
+        null; -- alert('다른 사용자에 의해 변경되었습니다.');
+    end if;
+end;
+/
+
+drop table 고객;
+
+create table 고객(
+    고객번호 number(10) constraint 고객_pk primary key,
+    적립포인트 number(10),
+    방문횟수 number(10),
+    최근방문일시 varchar2(8),
+    구매실적 number(10),
+    변경일시 varchar2(8)
+);
+
+begin
+    select 적립포인트, 방문횟수, 최근방문일시, 구매실적, 변경일시
+    into :a, :b, :c, :d, :mod_dt
+    from 고객
+    where 고객번호 = :cust_num;
+
+    -- 새로운 적립포인트 계산
+
+    update 고객
+    set 적립포인트 = :적립포인트, 변경일시 = sysdate
+    where 고객번호 = :cust_num
+    and 변경일시 = :mod_dt;
+
+    if sql%rowcount = 0 then
+        null; -- alert('다른 사용자에 의해 변경되었습니다.');
+    end if;
+end;
+/
+
+begin
+    select 적립포인트, 방문횟수, 최근방문일시, 구매실적, 변경일시
+    into :a, :b, :c, :d, :mod_dt
+    from 고객
+    where 고객번호 = :cust_num;
+
+    -- 새로운 적립포인트 계산
+
+    select 고객번호
+    into :dummy
+    from 고객
+    where 고객번호 = :cust_num
+    and 변경일시 = :mod_dt
+    for update nowait;
+
+    update 고객
+    set 적립포인트 = :적립포인트, 변경일시 = sysdate
+    where 고객번호 = :cust_num
+    and 변경일시 = :mod_dt;
+
+    if sql%rowcount = 0 then
+        null; -- alert('다른 사용자에 의해 변경되었습니다.');
+    end if;
+end;
+/
+
+drop table 고객;
+--------------------------------------------------------------------------------
+-- 동시성 제어 없는 낙관적 프로그래밍
+--------------------------------------------------------------------------------
+create table 상품(
+    상품코드 varchar2(10) constraint 상품_pk primary key,
+    가격 number(10)
+);
+
+create table 주문(
+    상품코드 varchar2(10) constraint 상품_fk references 상품(상품코드),
+    고객id varchar2(10),
+    주문일시 varchar2(8),
+    상점번호 number(10)
+);
+
+begin
+    insert into 주문
+    select :상품코드, :고객id, :주문일시, :상점번호
+    from 상품
+    where 상품코드 = :상품코드
+    and 가격 = :가격;
+
+    if sql%rowcount = 0 then
+        null; -- alert('다른 사용자에 의해 변경되었습니다.');
+    end if;
+end;
+/
+
+drop table 주문;
+drop table 상품;
+--------------------------------------------------------------------------------
+-- 로우 lock 대상 테이블 지정
+--------------------------------------------------------------------------------
+create table 계좌마스터(
+    계좌번호 varchar2(10) constraint 계좌마스터_pk primary key,
+    고객번호 number(10),
+    예수금 number(10)
+);
+
+create table 주문(
+    주문일자 varchar2(8),
+    주문순번 number(10),
+    계좌번호 varchar2(10) constraint 계좌마스터_fk references 계좌마스터(계좌번호),
+    종목 varchar2(10),
+    주문가격 number(10),
+    주문수량 number(10),
+    constraint 주문_pk primary key (주문일자, 주문순번)
+);
+
+select b.주문수량
+from 계좌마스터 a, 주문 b
+where a.고객번호 = :cust_no
+and b.계좌번호 = a.계좌번호
+and b.주문일자 = :ord_dt
+for update;
+
+rollback;
+
+select b.주문수량
+from 계좌마스터 a, 주문 b
+where a.고객번호 = :cust_no
+and b.계좌번호 = a.계좌번호
+and b.주문일자 = :ord_dt
+for update of b.주문수량;
+
+rollback;
+--------------------------------------------------------------------------------
+-- 6.4.3 채번 방식에 따른 insert 성능 비교
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- 자율 트랜잭션
+--------------------------------------------------------------------------------
+create table seq_tab
+as select 123 as gubun, 0 as seq from dual;
+
+create or replace function seq_nextval(l_gubun number) return number
+as
+    pragma autonomous_transaction;
+    l_new_seq seq_tab.seq%type;
+begin
+    update seq_tab
+    set seq = seq + 1
+    where gubun = l_gubun;
+
+    select seq into l_new_seq
+    from seq_tab
+    where gubun = l_gubun;
+
+    commit;
+
+    return l_new_seq;
+end;
+/
+
+create table target_tab(
+    id number(10) constraint target_tab_pk primary key,
+    val1 number(10),
+    val2 number(10),
+    val3 number(10)
+);
+
+begin
+    insert into target_tab values (seq_nextval(123), :x, :y, :z);
+end;
+/
+
+drop table target_tab;
+drop function seq_nextval;
+--------------------------------------------------------------------------------
+-- 시퀀스 오브젝트
+--------------------------------------------------------------------------------
+create sequence my_seq cache 1000;
+
+exec sys.dbms_shared_pool.keep('scott.my_seq', 'q');
+
+drop sequence my_seq;
+--------------------------------------------------------------------------------
+-- 시퀀스 lock
+--------------------------------------------------------------------------------
+-- 로우 캐시 lock
+create sequence myseq cache 1000;
+
+select cache_size, last_number
+from user_sequences
+where sequence_name = 'MYSEQ';
+
+select myseq.nextval from dual;
+
+select cache_size, last_number
+from user_sequences
+where sequence_name = 'MYSEQ';
+
+drop sequence myseq;
+--------------------------------------------------------------------------------
+-- max + 1 조회
+--------------------------------------------------------------------------------
+create table 상품거래(
+    거래일련번호 number(10) constraint 상품거래_pk primary key,
+    계좌번호 varchar2(10),
+    거래일시 varchar2(8),
+    상품코드 varchar2(10),
+    거래가격 number(10),
+    거래수량 number(10)
+);
+
+insert into 상품거래(거래일련번호, 계좌번호, 거래일시, 상품코드, 거래가격, 거래수량)
+values (
+    (select max(거래일련번호) + 1 from 상품거래),
+    :acnt_no,
+    sysdate,
+    :prod_cd,
+    :trd_price,
+    :trd_qty
+);
+--------------------------------------------------------------------------------
+-- 12c 시퀀스 신기능
+--------------------------------------------------------------------------------
+-- 컬럼 기본값으로 시퀀스 지정
+create sequence my_seq;
+
+create table t(
+    c1 number default my_seq.nextval not null,
+    c2 varchar2(5)
+);
+
+insert into t(c1, c2) values (my_seq.nextval, 'X');
+insert into t(c2) values ('X');
+
+select * from t;
+
+drop sequence my_seq;
+drop table t;
+-- identity 컬럼
+create table t(
+    c1 number generated always as identity,
+    c2 varchar2(5)
+);
+
+insert into t(c2) values ('X');
+insert into t(c1, c2) values (default, 'X');
+insert into t(c1, c2) values (3, 'X');
+
+select * from t;
+
+drop table t;
+
+create table t(
+    c1 number generated by default as identity,
+    c2 varchar2(5)
+);
+
+insert into t(c2) values ('X');
+insert into t(c1, c2) values (default, 'X');
+insert into t(c1, c2) values (3, 'X');
+
+select * from t;
+
+drop table t;
+-- 세션 시퀀스
+create sequence g_seq global;
+
+create sequence s_seq session;
+
+drop sequence g_seq;
+
+drop sequence s_seq;
+--------------------------------------------------------------------------------
+-- 시퀀스 신기능 활용
+--------------------------------------------------------------------------------
+create table t(
+    id varchar2(10),
+    c1 varchar2(1),
+    c2 varchar2(1)
+);
+
+create sequence g_seq global;
+create sequence s_seq session;
+
+select g_seq.nextval from dual;
+
+insert into t(id, c1, c2) values (
+    to_char(g_seq.currval, 'fm0000') || to_char(s_seq.nextval, 'fm0000'),
+    'A',
+    'B'
+);
+
+select * from t;
+
+drop sequence g_seq;
+drop sequence s_seq;
+drop table t;
+
+create sequence my_seq maxvalue 9999 scale extend;
+
+select my_seq.nextval as last_value,
+       substr(my_seq.nextval, 1, 3) as val1,
+       substr(my_seq.nextval, 4, 3) as val2,
+       substr(my_seq.nextval, 7) as val3,
+       sys_context('userenv', 'instance') as inst_id,
+       sys_context('userenv', 'sid') as sid
+from dual;
+
+drop sequence my_seq;
+
+create sequence my_seq maxvalue 9999999 scale;
+
+select my_seq.nextval as last_value,
+       substr(my_seq.nextval, 1, 3) as val1,
+       substr(my_seq.nextval, 4, 3) as val2,
+       substr(my_seq.nextval, 7) as val3,
+       sys_context('userenv', 'instance') as inst_id,
+       sys_context('userenv', 'sid') as sid
+from dual;
+
+drop sequence my_seq;
+
+create sequence my_seq;
+
+select sys_context('userenv', 'instance') as 인스턴스번호,
+       sys_context('userenv', 'sid') as 세션번호,
+       my_seq.nextval as 시퀀스번호
+from dual;
+
+drop sequence my_seq;
