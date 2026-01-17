@@ -1,0 +1,3 @@
+[submodule "SQL 전문가 가이드/db-sample-schemas"]
+	path = SQL 전문가 가이드/db-sample-schemas
+	url = https://github.com/oracle-samples/db-sample-schemas.git
